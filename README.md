@@ -106,6 +106,10 @@ npm run check          # svelte-check — type errors across the whole app
 
 ## Deploy to Vercel
 
+The build and serverless functions use Node.js 24.x. If you override the
+Node.js version in Vercel Project Settings, select **24.x** to match
+`package.json` and `svelte.config.js`.
+
 1. **Backblaze B2** (storage): sign up at backblaze.com (no card required for private buckets) → create a bucket, set it **Private** → Account → Application Keys → **Add a New Application Key**, scoped to that bucket → gives you `B2_KEY_ID` and `B2_APPLICATION_KEY`. The bucket's details page shows its **Endpoint** (e.g. `s3.us-west-004.backblazeb2.com`) and region code (e.g. `us-west-004`).
 2. **Vercel**: import the GitHub repo at vercel.com/new. `vercel.json` + `adapter-vercel` in `svelte.config.js` are already set up — Vercel auto-detects the SvelteKit framework preset.
 3. Add env vars in Project Settings → Environment Variables: `DATABASE_URL`, `SESSION_SECRET`, and the five `B2_*` values from step 1. No `ORIGIN`/`ADDRESS_HEADER`/`BODY_SIZE_LIMIT` needed — those were specific to the previous `adapter-node`/Render setup; `adapter-vercel` already knows how to read client IPs and request origin correctly on Vercel's own infrastructure.
