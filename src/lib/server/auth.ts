@@ -3,6 +3,8 @@ import { error } from '@sveltejs/kit';
 export interface SessionUser {
 	id: string;
 	email: string;
+	/** The `sessions` row behind this request's cookie. */
+	sessionId: string;
 }
 
 /**

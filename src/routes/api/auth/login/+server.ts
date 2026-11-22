@@ -76,7 +76,7 @@ export const POST: RequestHandler = async ({ request, cookies, getClientAddress 
 		}
 	}
 
-	await createSessionCookie(cookies, user.id, user.email);
+	await createSessionCookie(cookies, user.id, user.email, { ip, userAgent: request.headers.get('user-agent') });
 	await db.update(users).set({ lastLoginAt: new Date() }).where(eq(users.id, user.id));
 
 	// Return everything the browser needs to unlock the private key locally.

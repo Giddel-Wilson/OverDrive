@@ -171,14 +171,15 @@ describe('resume and fallback', () => {
 		expect(Buffer.compare(bytes, new Uint8Array(await file.arrayBuffer()))).toBe(0);
 	});
 
-	it('honours an abort signal', async () => {
-		installFakeServer();
+	it('rejects an already-aborted upload before creating a pending row', async () => {
+		const server = installFakeServer();
 		const kp = await generateEcdhKeypair();
 		const ac = new AbortController();
 		ac.abort();
 		await expect(
 			encryptAndUploadFile({ file: makeFile(1000), recipientPublicKey: kp.publicKey, choice: { fileAlgo: 'AES-GCM', keyAlgo: 'ECDH-P256' }, signal: ac.signal })
-		).rejects.toBeInstanceOf(UploadInterruptedError);
+		).rejects.toMatchObject({ name: 'AbortError' });
+		expect(server.files.size).toBe(0);
 	});
 });
 

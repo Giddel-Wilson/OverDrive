@@ -10,6 +10,11 @@ function randomNonce(bytes: number): Uint8Array {
 	return crypto.getRandomValues(new Uint8Array(bytes));
 }
 
+/** Native encoders/other windows can return a Uint8Array from a different realm. */
+function sodiumBytes(bytes: Uint8Array): Uint8Array {
+	return bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+}
+
 /**
  * Encrypts a single chunk (Uint8Array) with the chosen algorithm. Used for
  * both whole small files and per-chunk streaming of large uploads — each
@@ -35,7 +40,7 @@ export async function encryptChunk(
 
 	// ChaCha20-Poly1305 (IETF variant, 96-bit nonce) via libsodium.
 	const sodium = await getSodium();
-	return sodium.crypto_aead_chacha20poly1305_ietf_encrypt(plaintext, aad ?? null, null, nonce, key);
+	return sodium.crypto_aead_chacha20poly1305_ietf_encrypt(sodiumBytes(plaintext), aad ? sodiumBytes(aad) : null, null, sodiumBytes(nonce), sodiumBytes(key));
 }
 
 export async function decryptChunk(
@@ -56,7 +61,7 @@ export async function decryptChunk(
 	}
 
 	const sodium = await getSodium();
-	return sodium.crypto_aead_chacha20poly1305_ietf_decrypt(null, ciphertext, aad ?? null, nonce, key);
+	return sodium.crypto_aead_chacha20poly1305_ietf_decrypt(null, sodiumBytes(ciphertext), aad ? sodiumBytes(aad) : null, sodiumBytes(nonce), sodiumBytes(key));
 }
 
 /** Derives a per-chunk nonce from a 64-bit base + 32-bit big-endian counter. */

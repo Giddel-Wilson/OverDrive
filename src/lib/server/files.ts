@@ -1,6 +1,6 @@
 import { and, eq, inArray, isNotNull } from 'drizzle-orm';
-import { db, encryptedFiles } from './db';
-import { filesStore, chunkPrefix } from './blob-store';
+import { db, encryptedFiles, fileVersions } from './db';
+import { filesStore, contentPrefix } from './blob-store';
 
 /**
  * Permanently deletes files the user owns: removes every ciphertext object
@@ -21,16 +21,21 @@ export async function purgeFiles(
 
 	const conditions = [eq(encryptedFiles.ownerId, ownerId), inArray(encryptedFiles.id, fileIds)];
 	if (opts.onlyTrashed) conditions.push(isNotNull(encryptedFiles.deletedAt));
-	const rows = await db.select({ id: encryptedFiles.id }).from(encryptedFiles).where(and(...conditions));
+	const rows = await db.select({ id: encryptedFiles.id, ownerId: encryptedFiles.ownerId, storageKey: encryptedFiles.storageKey }).from(encryptedFiles).where(and(...conditions));
 
 	const store = filesStore();
 	const purged: string[] = [];
 	const failed: string[] = [];
 
-	for (const { id } of rows) {
+	for (const row of rows) {
+		const { id } = row;
 		try {
-			const objects = await store.list(chunkPrefix(ownerId, id));
-			const { failed: keysFailed } = await store.deleteMany(objects.map((o) => o.key));
+			const versions = await db.select({ storageKey: fileVersions.storageKey }).from(fileVersions).where(eq(fileVersions.fileId, id));
+			const pending = await db.select({ id: encryptedFiles.id, ownerId: encryptedFiles.ownerId, storageKey: encryptedFiles.storageKey }).from(encryptedFiles).where(and(eq(encryptedFiles.replacesFileId, id), eq(encryptedFiles.ownerId, ownerId)));
+			const prefixes = new Set([contentPrefix(row), ...versions.map((v) => `${v.storageKey}/`), ...pending.map(contentPrefix)]);
+			const keys = new Set<string>();
+			for (const prefix of prefixes) for (const object of await store.list(prefix)) keys.add(object.key);
+			const { failed: keysFailed } = await store.deleteMany([...keys]);
 			if (keysFailed.length > 0) {
 				failed.push(id);
 				continue;

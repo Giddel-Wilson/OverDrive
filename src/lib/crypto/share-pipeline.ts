@@ -30,6 +30,7 @@ export async function createShareLink(
 		method: 'POST',
 		headers: { 'Content-Type': 'application/json' },
 		body: JSON.stringify({
+			versionNumber: record.versionNumber ?? 1,
 			wrappedFileKey: toBase64(wrapped.wrapped),
 			kdf: kdfParams.kdf,
 			kdfSalt: toBase64(wrapped.salt),
@@ -49,6 +50,7 @@ export async function createShareLink(
 /** Shape returned by GET /api/share/[token] — the public, unauthenticated endpoint. */
 export interface ShareRecord {
 	fileId: string;
+	versionNumber: number;
 	fileAlgo: EncryptedFileRecord['fileAlgo'];
 	fileIv: string;
 	totalChunks: number;

@@ -48,6 +48,7 @@ function s3Client(): S3Client {
 export interface StoredObject {
 	key: string;
 	size: number;
+	lastModified?: Date;
 }
 
 /**
@@ -56,9 +57,9 @@ export interface StoredObject {
  * verification and permanent deletion, and presignPut so the browser can
  * upload ciphertext chunks straight to the bucket.
  */
-export function filesStore() {
+export function filesStore(bucketName?: string) {
 	const client = s3Client();
-	const Bucket = requireEnv('B2_BUCKET_NAME');
+	const Bucket = bucketName || requireEnv('B2_BUCKET_NAME');
 
 	return {
 		async set(key: string, data: ArrayBuffer): Promise<void> {
@@ -122,6 +123,23 @@ export function filesStore() {
 			return out;
 		},
 
+		/** One page of keys (for sweeping a big bucket across several runs). */
+		async listPage(
+			prefix: string,
+			continuationToken?: string,
+			maxKeys = 1000
+		): Promise<{ objects: StoredObject[]; next?: string }> {
+			const res = await client.send(
+				new ListObjectsV2Command({ Bucket, Prefix: prefix, ContinuationToken: continuationToken, MaxKeys: maxKeys })
+			);
+			return {
+				objects: (res.Contents ?? [])
+					.filter((o) => o.Key)
+					.map((o) => ({ key: o.Key as string, size: o.Size ?? 0, lastModified: o.LastModified })),
+				next: res.IsTruncated ? res.NextContinuationToken : undefined
+			};
+		},
+
 		/** A time-limited URL the browser can PUT one ciphertext chunk to directly. */
 		async presignPut(key: string, expiresIn = PRESIGN_EXPIRES_SECONDS): Promise<string> {
 			return getSignedUrl(client, new PutObjectCommand({ Bucket, Key: key }), { expiresIn });
@@ -133,3 +151,7 @@ export function filesStore() {
 export const chunkPrefix = (ownerId: string, fileId: string) => `${ownerId}/${fileId}/`;
 export const chunkKey = (ownerId: string, fileId: string, index: number) =>
 	`${chunkPrefix(ownerId, fileId)}chunk-${index}`;
+
+export const contentPrefix = (file: { ownerId: string; id: string; storageKey: string }) =>
+	`${file.storageKey || `${file.ownerId}/${file.id}`}/`;
+export const thumbnailKey = (prefix: string, hash: string) => `${prefix}thumbnail-${hash}`;

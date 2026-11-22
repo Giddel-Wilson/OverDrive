@@ -1,5 +1,6 @@
 import adapter from '@sveltejs/adapter-vercel';
 import { vitePreprocess } from '@sveltejs/vite-plugin-svelte';
+import { windowsVercelAdapter } from './scripts/windows-vercel-adapter.mjs';
 
 // svelte.config.js runs in plain Node during `vite dev`/`vite build`, not
 // inside the app itself, so this checks NODE_ENV directly rather than
@@ -13,9 +14,8 @@ const isProd = process.env.NODE_ENV === 'production';
 const config = {
 	preprocess: vitePreprocess(),
 	kit: {
-		adapter: adapter({
-			// Keep the function runtime aligned with package.json engines.node.
-			runtime: 'nodejs24.x',
+		adapter: windowsVercelAdapter(adapter({
+			runtime: 'nodejs20.x',
 			// Encryption happens client-side and ciphertext chunks go straight
 			// between the browser and Backblaze B2 through presigned URLs, so
 			// file size isn't bound by Vercel's 4.5MB body limit. Functions
@@ -23,7 +23,7 @@ const config = {
 			// chunk download route and the relay fallback upload route.
 			memory: 1024,
 			maxDuration: 60
-		}),
+		})),
 		alias: {
 			$crypto: 'src/lib/crypto',
 			$server: 'src/lib/server'

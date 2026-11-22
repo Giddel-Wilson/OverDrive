@@ -1,0 +1,17 @@
+1. Invite-only sign-up, per-user storage quota and a usage meter. Sign-up is open and there's no quota, so anyone with your URL can fill your B2 bucket. This is small and the most urgent.
+2. Automatic cleanup (a Vercel Cron job).
+- Delete trash after 30 days.
+- Delete abandoned uploads, with their stored chunks.
+- Sweep orphaned chunks. Today nothing purges them.
+3. Backups of the database. If the Neon rows are lost, the files in B2 can't be decrypted, and your recovery key won't help. Turn on Neon point-in-time restore and back the database up on a schedule.
+4. Real sign-out everywhere. Sessions are 30-day tokens that can't be revoked. Add a sessions list with revoke.
+
+Daily use
+5. Multi-select with bulk trash, move and download, plus drag-to-move into folders.
+6. Encrypted thumbnails and a photo gallery. Thumbnails are made in the browser at upload and stored encrypted, so browsing photos doesn't mean decrypting full files.
+7. Version history. Keep the last few versions of a file so a bad overwrite is recoverable.
+8. Share-link manager. A list of active links per file with revoke, if your share window doesn't already show them.
+
+What actually replaces Drive and iCloud
+9. Native app with background sync and phone photo backup (Tauri 2). This is the real replacement. It needs a change feed on the server, conflict handling and selective sync. Local device-to-device send belongs in this phase.
+10. Per-person sharing and shared folders. Wrap the file key to the other user's public key, which you can verify with the fingerprint on your Keys page. This is revocable and link-free.

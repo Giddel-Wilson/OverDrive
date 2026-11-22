@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { MAX_THUMBNAIL_BYTES } from '$lib/shared/limits';
 
 const keyAlgoSchema = z.enum(['RSA-OAEP', 'ECDH-P256']);
 const fileAlgoSchema = z.enum(['AES-GCM', 'ChaCha20-Poly1305']);
@@ -25,7 +26,9 @@ export const registerSchema = z.object({
 	privateKeyKdfParams: z.record(z.unknown()),
 	recoveryWrappedPrivateKey: recoveryFields.recoveryWrappedPrivateKey.optional(),
 	recoveryIv: recoveryFields.recoveryIv.optional(),
-	recoveryAuthToken: recoveryFields.recoveryAuthToken.optional()
+	recoveryAuthToken: recoveryFields.recoveryAuthToken.optional(),
+	/** Required when the server is invite-only (the default). */
+	inviteCode: z.string().trim().max(64).optional()
 });
 
 export const loginSchema = z.object({
@@ -66,6 +69,12 @@ export const changePasswordSchema = z.object({
 	privateKeyKdfParams: z.record(z.unknown())
 });
 
+export const thumbnailPayloadSchema = z.object({
+	encryptedBlob: z.string().min(24).max(Math.ceil(MAX_THUMBNAIL_BYTES / 3) * 4).regex(/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/),
+	iv: z.string().length(16).regex(/^[A-Za-z0-9+/]{16}$/),
+	ciphertextSha256: z.string().regex(/^[0-9a-f]{64}$/)
+});
+
 export const uploadInitSchema = z.object({
 	action: z.literal('init'),
 	fileAlgo: fileAlgoSchema,
@@ -83,13 +92,16 @@ export const uploadInitSchema = z.object({
 	}),
 	totalChunks: z.number().int().min(1).max(100_000),
 	chunkSizeBytes: z.number().int().min(1024).max(64 * 1024 * 1024).optional(),
-	ciphertextSizeBytesEstimate: z.number().int().min(0)
+	ciphertextSizeBytesEstimate: z.number().int().min(0),
+	thumbnail: thumbnailPayloadSchema.optional(),
+	replacesFileId: z.string().uuid().optional(),
+	baseVersion: z.number().int().min(1).optional()
 });
 
 export const uploadFinalizeSchema = z.object({
 	action: z.literal('finalize'),
 	fileId: z.string().uuid(),
-	ciphertextSha256: z.string().length(64)
+	ciphertextSha256: z.string().regex(/^[0-9a-f]{64}$/)
 });
 
 export const uploadPresignSchema = z.object({
@@ -101,7 +113,8 @@ export const uploadPresignSchema = z.object({
 /** Replace a file's encrypted metadata blob (rename / move). */
 export const metadataUpdateSchema = z.object({
 	encryptedBlob: base64Schema,
-	iv: base64Schema
+	iv: base64Schema,
+	versionNumber: z.number().int().min(1).default(1)
 });
 
 export const folderCreateSchema = z.object({
@@ -121,6 +134,7 @@ export const trashSchema = z.object({
 });
 
 export const shareCreateSchema = z.object({
+	versionNumber: z.number().int().min(1).default(1),
 	wrappedFileKey: base64Schema,
 	kdf: kdfAlgoSchema,
 	kdfSalt: base64Schema,
@@ -128,4 +142,14 @@ export const shareCreateSchema = z.object({
 	wrapIv: base64Schema,
 	maxDownloads: z.number().int().min(1).max(10_000).nullable().optional(),
 	expiresAt: z.string().datetime().nullable().optional()
+});
+
+export const versionRestoreSchema = z.object({
+	baseVersion: z.number().int().min(1),
+	metadata: z.object({ encryptedBlob: base64Schema, iv: base64Schema })
+});
+
+export const thumbnailUpdateSchema = z.object({
+	versionNumber: z.number().int().min(1),
+	thumbnail: thumbnailPayloadSchema
 });

@@ -3,9 +3,14 @@ import { unzipSync, strFromU8 } from 'fflate';
 import { mkdtempSync, writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { ZipWriter, crc32Update } from '../zip-writer';
 import { randomBytes } from './fake-server';
+
+// Windows can expose an uninstalled Store alias as python3. Probe the
+// optional independent reader instead of assuming that alias is usable.
+const pythonReader = [process.env.PYTHON_BIN, 'python3', 'python'].filter((command): command is string => Boolean(command))
+	.find((command) => spawnSync(command, ['--version'], { windowsHide: true }).status === 0);
 
 async function build(forceZip64: boolean) {
 	const parts: Uint8Array[] = [];
@@ -42,13 +47,13 @@ describe.each([false, true])('ZipWriter (forceZip64=%s)', (forceZip64) => {
 		expect(Object.keys(files)).toContain('empty-folder/');
 	});
 
-	it('passes an independent reader (Python zipfile CRC test + info-zip if present)', async () => {
+	it.skipIf(!pythonReader)('passes an independent Python zipfile CRC check when Python is installed', async () => {
 		const { bytes } = await build(forceZip64);
 		const dir = mkdtempSync(join(tmpdir(), 'zipw-'));
 		const path = join(dir, 'out.zip');
 		writeFileSync(path, bytes);
 		const out = execFileSync(
-			'python3',
+			pythonReader!,
 			['-c', `import zipfile,sys\nz=zipfile.ZipFile(sys.argv[1])\nassert z.testzip() is None\nprint(sorted(z.namelist()))\nprint(len(z.read('docs/ünïcode — name.bin')))`, path],
 			{ encoding: 'utf8' }
 		);

@@ -8,8 +8,9 @@
 		open,
 		title,
 		folders,
-		/** Folder being moved (so it can't be moved into itself / its subtree); null when moving a file. */
-		movingFolderId = null,
+		/** Folders being moved (so none can go into itself or its own subtree). Empty when only files move. */
+		movingFolderIds = [],
+		/** Where the items are now; undefined when they come from different places. */
 		currentParentId,
 		busy = false,
 		onPick,
@@ -18,8 +19,8 @@
 		open: boolean;
 		title: string;
 		folders: FolderMap;
-		movingFolderId?: string | null;
-		currentParentId: string | null;
+		movingFolderIds?: string[];
+		currentParentId: string | null | undefined;
 		busy?: boolean;
 		onPick: (parentId: string | null) => void;
 		onClose: () => void;
@@ -29,7 +30,7 @@
 
 	const rows = $derived.by<Row[]>(() => {
 		const blocked = new Set<string>(
-			movingFolderId ? [movingFolderId, ...descendantFolderIds(movingFolderId, folders)] : []
+			movingFolderIds.flatMap((id) => [id, ...descendantFolderIds(id, folders)])
 		);
 		const out: Row[] = [{ id: null, name: 'Vault (top level)', depth: 0, disabled: currentParentId === null }];
 		const walk = (parentId: string | null, depth: number) => {

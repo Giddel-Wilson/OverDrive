@@ -49,6 +49,7 @@ export const GET: RequestHandler = async ({ params, locals, getClientAddress, re
 
 	return json({
 		fileId: file.id,
+		versionNumber: file.versionNumber,
 		storageKey: file.storageKey,
 		fileAlgo: file.fileAlgo,
 		fileIv: file.fileIv,

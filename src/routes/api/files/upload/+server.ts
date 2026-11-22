@@ -1,14 +1,17 @@
 import { json, error } from '@sveltejs/kit';
 import { eq, and, isNull } from 'drizzle-orm';
-import { db, encryptedFiles, fileMetadata } from '$server/db';
+import { db, encryptedFiles, fileVersions, fileMetadata } from '$server/db';
 import { requireUser } from '$server/auth';
 import { logAccess } from '$server/access-log';
 import { filesStore, sha256Hex, chunkKey, chunkPrefix } from '$server/blob-store';
 import { parseBody } from '$server/validate';
 import { uploadInitSchema, uploadFinalizeSchema, uploadPresignSchema } from '$server/schemas';
 import { purgeFiles } from '$server/files';
+import { assertWithinQuota } from '$server/quota';
 import { MAX_FILE_SIZE_BYTES } from '$lib/shared/limits';
 import { CHUNK_SIZE_BYTES } from '$crypto/types';
+import { ownedCurrentFile, applyFileRevision } from '$server/versions';
+import { thumbnailBytes, storeThumbnail } from '$server/thumbnails';
 import type { RequestHandler } from './$types';
 
 /** Loads an upload the caller owns that hasn't been finalized (or 404s). */
@@ -19,6 +22,18 @@ async function ownedPendingUpload(fileId: string, userId: string) {
 		.where(and(eq(encryptedFiles.id, fileId), eq(encryptedFiles.ownerId, userId), isNull(encryptedFiles.deletedAt)));
 	if (!file) error(404, 'Upload not found');
 	return file;
+}
+
+/** A promoted upload no longer has its temporary row, but its immutable pointer remains. */
+async function completedUpload(fileId: string, userId: string) {
+	const pointer = `${userId}/${fileId}`;
+	const [current] = await db.select({ fileId: encryptedFiles.id, versionNumber: encryptedFiles.versionNumber, totalChunks: encryptedFiles.totalChunks, sha256: encryptedFiles.ciphertextSha256 })
+		.from(encryptedFiles).where(and(eq(encryptedFiles.ownerId, userId), eq(encryptedFiles.storageKey, pointer), eq(encryptedFiles.uploadStatus, 'complete'), isNull(encryptedFiles.deletedAt)));
+	if (current) return current;
+	const [retained] = await db.select({ fileId: fileVersions.fileId, versionNumber: fileVersions.versionNumber, totalChunks: fileVersions.totalChunks, sha256: fileVersions.ciphertextSha256 })
+		.from(fileVersions).innerJoin(encryptedFiles, eq(encryptedFiles.id, fileVersions.fileId))
+		.where(and(eq(encryptedFiles.ownerId, userId), eq(fileVersions.storageKey, pointer), isNull(encryptedFiles.deletedAt)));
+	return retained;
 }
 
 /** chunk-N object keys under a file's prefix → sorted list of N. */
@@ -48,6 +63,12 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 
 	if (rawBody.action === 'init') {
 		const body = parseBody(uploadInitSchema, rawBody);
+		if (Boolean(body.replacesFileId) !== Boolean(body.baseVersion)) error(400, 'A replacement needs both a file id and its current version number');
+		if (body.replacesFileId) {
+			const current = await ownedCurrentFile(body.replacesFileId, user.id);
+			if (current.versionNumber !== body.baseVersion) error(409, 'This file has a newer version. Refresh before replacing it.');
+		}
+		const thumbnail = body.thumbnail ? await thumbnailBytes(body.thumbnail) : null;
 
 		// Defense in depth — the client already checks this before
 		// encrypting, but a client can't be trusted to enforce its own
@@ -55,6 +76,10 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		if (body.ciphertextSizeBytesEstimate > MAX_FILE_SIZE_BYTES + body.totalChunks * 16) {
 			error(413, `File exceeds the ${MAX_FILE_SIZE_BYTES / (1024 * 1024 * 1024)} GB limit`);
 		}
+
+		// Storage limit (default or per-user override). Cheap, and done before
+		// any row is created or any chunk is encrypted and sent.
+		await assertWithinQuota(user.id, body.ciphertextSizeBytesEstimate + (thumbnail?.length ?? 0));
 
 		const [row] = await db
 			.insert(encryptedFiles)
@@ -71,7 +96,12 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 				keyWrapEphemeralPublicKeyJwk: body.ephemeralPublicKeyJwk ?? null,
 				totalChunks: body.totalChunks,
 				ciphertextSha256: '', // set on finalize
-				uploadStatus: 'uploading'
+				uploadStatus: 'uploading',
+				replacesFileId: body.replacesFileId ?? null,
+				baseVersion: body.baseVersion ?? null,
+				thumbnailIv: body.thumbnail?.iv ?? null,
+				thumbnailSha256: body.thumbnail?.ciphertextSha256 ?? null,
+				thumbnailSizeBytes: thumbnail?.length ?? 0
 			})
 			.returning({ id: encryptedFiles.id });
 
@@ -83,6 +113,10 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 			strengthScore: body.metadata.strengthScore,
 			strengthLabel: body.metadata.strengthLabel
 		});
+		if (body.thumbnail && thumbnail) {
+			try { await storeThumbnail(chunkPrefix(user.id, row.id), body.thumbnail, thumbnail); }
+			catch (err) { await purgeFiles(user.id, [row.id], { onlyTrashed: false }); throw err; }
+		}
 
 		return json({ fileId: row.id });
 	}
@@ -102,6 +136,11 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 
 	if (rawBody.action === 'finalize') {
 		const { fileId, ciphertextSha256 } = parseBody(uploadFinalizeSchema, rawBody);
+		const completed = await completedUpload(fileId, user.id);
+		if (completed) {
+			if (completed.sha256 !== ciphertextSha256) error(409, 'This completed upload has a different integrity hash');
+			return json({ ok: true, fileId: completed.fileId, versionNumber: completed.versionNumber });
+		}
 		const file = await ownedPendingUpload(fileId, user.id);
 		if (file.uploadStatus === 'complete') return json({ ok: true }); // idempotent
 
@@ -126,10 +165,14 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 			return json({ message: 'Stored ciphertext size does not match what was declared', expected: file.ciphertextSizeBytes, actual: total }, { status: 409 });
 		}
 
+		if (file.replacesFileId) {
+			return json(await applyFileRevision(user.id, file.replacesFileId, file.baseVersion!, { kind: 'upload', id: file.id, ciphertextSha256 }));
+		}
+
 		await db
 			.update(encryptedFiles)
 			.set({ ciphertextSha256, storageKey: `${user.id}/${file.id}`, uploadStatus: 'complete' })
-			.where(eq(encryptedFiles.id, file.id));
+			.where(and(eq(encryptedFiles.id, file.id), eq(encryptedFiles.uploadStatus, 'uploading'), isNull(encryptedFiles.deletedAt)));
 		await logAccess({ fileId: file.id, actorId: user.id, action: 'UPLOAD', success: true });
 		return json({ ok: true });
 	}
@@ -142,6 +185,8 @@ export const GET: RequestHandler = async ({ url, locals }) => {
 	const user = requireUser(locals);
 	const fileId = url.searchParams.get('fileId');
 	if (!fileId) error(400, 'Missing fileId');
+	const completed = await completedUpload(fileId, user.id);
+	if (completed) return json({ status: 'complete', fileId: completed.fileId, totalChunks: completed.totalChunks, uploaded: Array.from({ length: completed.totalChunks }, (_, index) => index) });
 
 	const file = await ownedPendingUpload(fileId, user.id);
 	const prefix = chunkPrefix(user.id, file.id);

@@ -67,7 +67,7 @@
 				{/if}
 				<div class="min-w-0">
 					<h2 id="modal-title" class="font-semibold tracking-tight">{title}</h2>
-					<p id="modal-description" class="mt-1.5 text-sm text-[var(--color-text-secondary)]">
+					<p id="modal-description" class="mt-1.5 break-words text-sm text-[var(--color-text-secondary)]">
 						{description}
 					</p>
 				</div>

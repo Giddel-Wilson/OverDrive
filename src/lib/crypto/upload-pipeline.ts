@@ -12,6 +12,7 @@ import { computeStrengthRating } from './strength';
 import { toBase64, fromBase64 } from './encoding';
 import { decryptRecordMetadata, unwrapRecordFileKey, type EncryptedFileRecord } from './download-pipeline';
 import { MAX_FILE_SIZE_BYTES, PRESIGN_BATCH_SIZE, UPLOAD_CONCURRENCY, formatBytes } from '../shared/limits';
+import { createPhotoThumbnail, encryptPhotoThumbnail } from './thumbnails';
 
 export interface EncryptionChoice {
 	fileAlgo: FileAlgo;
@@ -50,6 +51,10 @@ interface UploadFileOptions {
 	choice: EncryptionChoice;
 	/** Folder to place the file in (null = vault root). Stored inside the encrypted metadata. */
 	folderId?: string | null;
+	/** Explicit replacement keeps the logical file id, name and location. */
+	replacesFileId?: string;
+	baseVersion?: number;
+	metadataName?: string;
 	onProgress?: (p: UploadProgress) => void;
 	signal?: AbortSignal;
 	/** Base delay for exponential backoff between retries. Tests lower it. */
@@ -136,7 +141,7 @@ interface ChunkRunOptions {
  * what makes resuming possible), uploads the ones storage doesn't have yet
  * with bounded parallelism, then finalizes.
  */
-async function runChunkUpload(o: ChunkRunOptions): Promise<void> {
+async function runChunkUpload(o: ChunkRunOptions): Promise<{ fileId?: string; versionNumber?: number }> {
 	const { file, fileId, fileKey, baseNonce, fileAlgo, totalChunks, alreadyUploaded, onProgress, signal } = o;
 	const retryBase = o.retryBaseDelayMs ?? 500;
 	const presigner = createPresigner(fileId, totalChunks, alreadyUploaded);
@@ -249,8 +254,9 @@ async function runChunkUpload(o: ChunkRunOptions): Promise<void> {
 	signal?.throwIfAborted();
 
 	report('finalizing');
-	await postJson({ action: 'finalize', fileId, ciphertextSha256: hasher.digestHex() }, 'Failed to finalize upload');
+	const result = await postJson({ action: 'finalize', fileId, ciphertextSha256: hasher.digestHex() }, 'Failed to finalize upload');
 	onProgress?.({ phase: 'done', percent: 100, bytesDone: file.size, bytesTotal: file.size, mode, resumedChunks });
+	return result;
 }
 
 /**
@@ -268,10 +274,14 @@ export async function encryptAndUploadFile({
 	recipientPublicKey,
 	choice,
 	folderId = null,
+	replacesFileId,
+	baseVersion,
+	metadataName,
 	onProgress,
 	signal,
 	retryBaseDelayMs
 }: UploadFileOptions) {
+	signal?.throwIfAborted();
 	if (file.size > MAX_FILE_SIZE_BYTES) {
 		throw new Error(`File is ${formatBytes(file.size)} — the limit is ${formatBytes(MAX_FILE_SIZE_BYTES)}.`);
 	}
@@ -280,10 +290,13 @@ export async function encryptAndUploadFile({
 	const baseNonce = newBaseNonce();
 	// An empty file still gets one (empty) chunk so it has an auth tag and a hash.
 	const totalChunks = Math.max(1, Math.ceil(file.size / CHUNK_SIZE_BYTES));
+	const image = await createPhotoThumbnail(file);
+	signal?.throwIfAborted();
+	const thumbnail = image ? await encryptPhotoThumbnail(image, fileKey) : undefined;
 
 	// 1. Encrypt metadata (filename, mime, size, folder) as its own small blob.
 	const metadataPlain = new TextEncoder().encode(
-		JSON.stringify({ name: file.name, mimeType: file.type || 'application/octet-stream', size: file.size, folderId })
+		JSON.stringify({ name: metadataName ?? file.name, ...(metadataName && metadataName !== file.name ? { uploadName: file.name } : {}), mimeType: file.type || 'application/octet-stream', size: file.size, folderId })
 	);
 	const { ciphertext: metaCiphertext, iv: metaIv } = await encryptBlob(metadataPlain, fileKey, choice.fileAlgo);
 
@@ -296,6 +309,9 @@ export async function encryptAndUploadFile({
 	const { fileId } = await postJson(
 		{
 			action: 'init',
+			replacesFileId,
+			baseVersion,
+			thumbnail,
 			fileAlgo: choice.fileAlgo,
 			keyAlgo: choice.keyAlgo,
 			fileIv: toBase64(baseNonce),
@@ -317,8 +333,10 @@ export async function encryptAndUploadFile({
 	);
 
 	// 4. Encrypt + upload chunks, then finalize.
+	let completedFileId = fileId;
+	let versionNumber: number | undefined;
 	try {
-		await runChunkUpload({
+		const completed = await runChunkUpload({
 			file,
 			fileId,
 			fileKey,
@@ -330,12 +348,14 @@ export async function encryptAndUploadFile({
 			signal,
 			retryBaseDelayMs
 		});
+		completedFileId = completed.fileId ?? fileId;
+		versionNumber = completed.versionNumber;
 	} catch (err) {
 		const reason = err instanceof Error ? err.message : 'Upload interrupted';
 		throw new UploadInterruptedError(`${reason} — the upload was saved so you can resume it.`, fileId);
 	}
 
-	return { fileId, strength };
+	return { fileId: completedFileId, versionNumber, strength };
 }
 
 /**
@@ -362,8 +382,8 @@ export async function resumeUpload({
 }) {
 	const fileKey = await unwrapRecordFileKey(record, privateKey);
 	const meta = await decryptRecordMetadata(record, fileKey);
-	if (!meta || meta.name !== file.name || meta.size !== file.size) {
-		throw new Error(`That is not the same file. Select "${meta?.name ?? 'the original file'}" (${formatBytes(meta?.size ?? 0)}) to resume.`);
+	if (!meta || (meta.uploadName ?? meta.name) !== file.name || meta.size !== file.size) {
+		throw new Error(`That is not the same file. Select "${meta?.uploadName ?? meta?.name ?? 'the original file'}" (${formatBytes(meta?.size ?? 0)}) to resume.`);
 	}
 
 	const res = await fetch(`/api/files/upload?fileId=${record.id}`);

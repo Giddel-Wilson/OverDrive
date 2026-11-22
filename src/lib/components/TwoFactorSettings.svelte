@@ -31,7 +31,8 @@
 			const data = await post({ action: 'setup' });
 			secret = data.secret;
 			// Generated locally from the otpauth URI — the secret is not sent to any QR service.
-			qrSvg = await QRCode.toString(data.otpauthUri, { type: 'svg', margin: 1, width: 192 });
+			// Leave room for the card's 4px inset so the SVG fits inside its rounded edge.
+			qrSvg = await QRCode.toString(data.otpauthUri, { type: 'svg', margin: 1, width: 184 });
 			code = '';
 			stage = 'setup';
 		} catch (e) {
@@ -110,9 +111,9 @@
 			</ol>
 			<div class="flex flex-col items-start gap-3 sm:flex-row sm:items-center">
 				<!-- Library-generated SVG from a locally built string, not user input. -->
-				<div class="h-fit w-fit mx-auto md:mx-0 shrink-0 rounded-[var(--radius-md)] bg-white p-1">{@html qrSvg}</div>
-				<div class="min-w-0 text-center md:text-left mx-auto md:mx-0 space-y-1 text-xs text-[var(--color-text-tertiary)]">
-					<p>Can't scan? Enter this key manual  ly:</p>
+				<div class="h-48 w-48 shrink-0 overflow-hidden rounded-[var(--radius-md)] bg-white p-1">{@html qrSvg}</div>
+				<div class="min-w-0 space-y-1 text-xs text-[var(--color-text-tertiary)]">
+					<p>Can't scan? Enter this key manually:</p>
 					<p class="{ui.mono} break-all text-sm tracking-wider text-[var(--color-text-primary)]">{secret}</p>
 				</div>
 			</div>

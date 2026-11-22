@@ -50,10 +50,10 @@ export async function createFolderPayload(
 	name: string,
 	parentId: string | null,
 	keyAlgo: KeyAlgo,
-	publicKey: CryptoKey
+	publicKey: CryptoKey,
+	algo: FileAlgo = 'AES-GCM'
 ) {
 	const folderKey = generateFileKey();
-	const algo: FileAlgo = 'AES-GCM';
 	const { ciphertext, iv } = await encryptBlob(
 		new TextEncoder().encode(JSON.stringify({ name, parentId } satisfies FolderMeta)),
 		folderKey,
@@ -105,7 +105,7 @@ export async function reencryptFileMeta(
 		key,
 		record.metadata.algo
 	);
-	return { encryptedBlob: toBase64(ciphertext), iv: toBase64(iv) };
+	return { encryptedBlob: toBase64(ciphertext), iv: toBase64(iv), versionNumber: record.versionNumber ?? 1 };
 }
 
 // ---------------------------------------------------------------------------

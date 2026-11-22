@@ -1,5 +1,7 @@
 <script lang="ts">
+	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
+	import { page } from '$app/state';
 	import { ShieldCheck, Loader2 } from 'lucide-svelte';
 	import { generateRsaKeypair, generateEcdhKeypair } from '$crypto/key-encryption';
 	import { wrapPrivateKey } from '$crypto/private-key';
@@ -10,6 +12,10 @@
 
 	let email = $state('');
 	let displayName = $state('');
+	// Sign-up policy from the server: 'open', 'invite' (the default) or 'closed'.
+	let mode = $state<'loading' | 'open' | 'invite' | 'closed'>('loading');
+	let bootstrap = $state(false);
+	let inviteCode = $state('');
 	let password = $state('');
 	let confirmPassword = $state('');
 	let keyAlgo = $state<KeyAlgo>('RSA-OAEP');
@@ -18,6 +24,19 @@
 	let errorMsg = $state<string | null>(null);
 	// Set after a successful sign-up: the one-time recovery kit the user must acknowledge.
 	let kit = $state<{ email: string; key: string } | null>(null);
+
+	onMount(async () => {
+		// An invite link looks like /register?invite=XXXX-XXXX-XXXX-XXXX
+		inviteCode = page.url.searchParams.get('invite') ?? '';
+		try {
+			const res = await fetch('/api/auth/registration');
+			const info = await res.json();
+			mode = info.mode;
+			bootstrap = info.bootstrap;
+		} catch {
+			mode = 'invite'; // can't tell — the server decides anyway
+		}
+	});
 
 	const passwordTooShort = $derived(password.length > 0 && password.length < 12);
 	const passwordsMismatch = $derived(confirmPassword.length > 0 && password !== confirmPassword);
@@ -69,7 +88,8 @@
 					publicKeyJwk,
 					keyAlgo,
 					...wrapped,
-					...recovery
+					...recovery,
+					...(mode === 'invite' && inviteCode.trim() ? { inviteCode: inviteCode.trim() } : {})
 				})
 			});
 
@@ -111,9 +131,15 @@
 				<p class="mt-1 text-sm text-[var(--color-text-tertiary)]">Your vault is ready. One last step before you start.</p>
 			</div>
 			<RecoveryKit email={kit.email} recoveryKey={kit.key} doneLabel="Continue to my vault" onDone={() => goto('/dashboard')} />
+		{:else if mode === 'closed'}
+			<div class="space-y-3">
+				<h1 class="text-xl font-semibold tracking-tight">Sign-ups are closed</h1>
+				<p class="text-sm text-[var(--color-text-tertiary)]">This server isn't accepting new accounts right now.</p>
+				<a href="/login" class="inline-block text-sm underline" style="color: var(--color-accent)">Sign in instead</a>
+			</div>
 		{:else}
 		<div>
-			<h1 class="text-xl font-semibold tracking-tight">Create your vault</h1>
+			<h1 class="text-xl font-semibold tracking-tight">{bootstrap ? 'Create the first account' : 'Create your vault'}</h1>
 			<p class="mt-1 text-sm text-[var(--color-text-tertiary)]">
 				Your private key is generated and locked in your browser, using a key derived from your password. We never see it.
 				The password itself is sent over TLS only so we can check it at sign-in — it is never stored.
@@ -121,6 +147,28 @@
 		</div>
 
 		<form class="space-y-4" onsubmit={handleSubmit}>
+			{#if bootstrap}
+				<div class="rounded-[var(--radius-md)] border border-[var(--color-border-strong)] bg-[var(--color-surface-2)] px-3 py-2.5 text-sm text-[var(--color-text-secondary)]">
+					No accounts exist yet, so this one is open to anyone. Use the email listed in <span class="font-mono-data">ADMIN_EMAILS</span> to
+					become the admin.
+				</div>
+			{/if}
+			{#if mode === 'invite'}
+				<div class="space-y-1.5">
+					<label for="invite" class="text-sm font-medium text-[var(--color-text-secondary)]">Invite code</label>
+					<input
+						id="invite"
+						required
+						autocomplete="off"
+						autocapitalize="characters"
+						spellcheck="false"
+						placeholder="XXXX-XXXX-XXXX-XXXX"
+						bind:value={inviteCode}
+						class="font-mono-data h-11 w-full rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 text-sm tracking-wider outline-none focus:border-[var(--color-accent)]"
+					/>
+					<p class="text-xs text-[var(--color-text-tertiary)]">Sign-up is by invitation. Ask the person who runs this vault for a code.</p>
+				</div>
+			{/if}
 			<div class="space-y-1.5">
 				<label for="email" class="text-sm font-medium text-[var(--color-text-secondary)]">Email</label>
 				<input

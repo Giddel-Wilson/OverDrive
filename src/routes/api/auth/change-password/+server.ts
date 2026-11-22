@@ -6,6 +6,7 @@ import { hashPassword, verifyPassword } from '$server/auth-server';
 import { parseBody } from '$server/validate';
 import { changePasswordSchema } from '$server/schemas';
 import { logAccess } from '$server/access-log';
+import { revokeSessions } from '$server/sessions';
 import type { RequestHandler } from './$types';
 
 export const POST: RequestHandler = async ({ request, locals, getClientAddress }) => {
@@ -40,6 +41,10 @@ export const POST: RequestHandler = async ({ request, locals, getClientAddress }
 			privateKeyKdfParams
 		})
 		.where(eq(users.id, sessionUser.id));
+
+	// A new password should lock out anyone who had the old one: every other
+	// device must sign in again. This browser stays signed in.
+	await revokeSessions(sessionUser.id, sessionUser.sessionId);
 
 	return json({ ok: true });
 };

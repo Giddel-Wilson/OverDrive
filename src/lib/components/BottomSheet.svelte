@@ -2,6 +2,7 @@
 	import type { Snippet } from 'svelte';
 	import { fade, fly } from 'svelte/transition';
 	import { cubicOut } from 'svelte/easing';
+	import { lockBodyScroll } from '$lib/body-scroll-lock';
 
 	let {
 		open,
@@ -24,9 +25,7 @@
 	// Freeze the page behind the sheet while it's open.
 	$effect(() => {
 		if (!open) return;
-		const previous = document.body.style.overflow;
-		document.body.style.overflow = 'hidden';
-		return () => (document.body.style.overflow = previous);
+		return lockBodyScroll();
 	});
 
 	// Drag the handle down to dismiss (touch, pen or mouse).

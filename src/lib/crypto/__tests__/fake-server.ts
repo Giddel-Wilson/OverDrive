@@ -7,6 +7,7 @@ interface StoredFile {
 	chunks: Map<number, Uint8Array>;
 	sha?: string;
 	complete: boolean;
+	versionNumber: number;
 }
 
 /**
@@ -17,6 +18,7 @@ interface StoredFile {
  */
 export function installFakeServer(opts: { failDirectPut?: (fileId: string, index: number, attempt: number) => 'http500' | 'network' | null } = {}) {
 	const files = new Map<string, StoredFile>();
+	const versions = new Map<string, StoredFile[]>();
 	const stats = { directPuts: 0, relayPuts: 0, presignCalls: 0, directAttempts: new Map<string, number>() };
 	let nextId = 1;
 
@@ -46,8 +48,12 @@ export function installFakeServer(opts: { failDirectPut?: (fileId: string, index
 			if (method === 'POST') {
 				const body = JSON.parse(init!.body as string);
 				if (body.action === 'init') {
+					if (body.replacesFileId) {
+						const current = files.get(body.replacesFileId);
+						if (!current?.complete || current.versionNumber !== body.baseVersion) return json({ message: 'The current version changed' }, 409);
+					}
 					const id = `file-${nextId++}`;
-					files.set(id, { init: body, chunks: new Map(), complete: false });
+					files.set(id, { init: body, chunks: new Map(), complete: false, versionNumber: 1 });
 					return json({ fileId: id });
 				}
 				if (body.action === 'presign') {
@@ -60,9 +66,18 @@ export function installFakeServer(opts: { failDirectPut?: (fileId: string, index
 					const f = files.get(body.fileId)!;
 					const missing = [...Array(f.init.totalChunks).keys()].filter((i) => !f.chunks.has(i));
 					if (missing.length) return json({ message: `${missing.length} chunk(s) never reached storage`, missing }, 409);
+					const replacedId = f.init.replacesFileId as string | undefined;
+					const current = replacedId ? files.get(replacedId) : undefined;
+					if (replacedId && (!current?.complete || current.versionNumber !== f.init.baseVersion)) return json({ message: 'The current version changed' }, 409);
 					f.sha = body.ciphertextSha256;
 					f.complete = true;
-					return json({ ok: true });
+					if (replacedId && current) {
+						versions.set(replacedId, [...(versions.get(replacedId) ?? []), current]);
+						f.versionNumber = current.versionNumber + 1;
+						files.set(replacedId, f);
+						files.delete(body.fileId);
+					}
+					return json({ ok: true, fileId: replacedId ?? body.fileId, versionNumber: f.versionNumber });
 				}
 			}
 			if (method === 'PUT') {
@@ -79,6 +94,12 @@ export function installFakeServer(opts: { failDirectPut?: (fileId: string, index
 			}
 		}
 
+		const archived = /^\/api\/files\/([^/]+)\/versions\/([^/]+)\/chunks\/(\d+)$/.exec(url.pathname);
+		if (archived) {
+			const version = versions.get(archived[1])?.find((entry) => `${archived[1]}-v${entry.versionNumber}` === archived[2]);
+			const chunk = version?.chunks.get(Number(archived[3]));
+			return chunk ? json({ chunk: toBase64(chunk) }) : json({ message: 'missing version chunk' }, 404);
+		}
 		const m = /^\/api\/files\/([^/]+)\/chunks\/(\d+)$/.exec(url.pathname);
 		if (m) {
 			const chunk = files.get(m[1])?.chunks.get(Number(m[2]));
@@ -89,25 +110,33 @@ export function installFakeServer(opts: { failDirectPut?: (fileId: string, index
 
 	vi.stubGlobal('fetch', vi.fn(impl));
 
+	function record(fileId: string, entry = files.get(fileId)!): EncryptedFileRecord {
+		return {
+			id: fileId,
+			versionNumber: entry.versionNumber,
+			fileAlgo: entry.init.fileAlgo,
+			fileIv: entry.init.fileIv,
+			keyAlgo: entry.init.keyAlgo,
+			wrappedFileKey: entry.init.wrappedFileKey,
+			keyWrapIv: entry.init.wrapIv,
+			keyWrapEphemeralPublicKeyJwk: entry.init.ephemeralPublicKeyJwk,
+			totalChunks: entry.init.totalChunks,
+			ciphertextSha256: entry.sha,
+			uploadStatus: entry.complete ? 'complete' : 'uploading',
+			metadata: { encryptedBlob: entry.init.metadata.encryptedBlob, iv: entry.init.metadata.iv, algo: entry.init.metadata.algo }
+		};
+	}
+
 	return {
 		files,
+		versions,
 		stats,
 		/** Rebuilds the record GET /api/files would return for a finished (or pending) upload. */
-		record(fileId: string): EncryptedFileRecord {
-			const f = files.get(fileId)!;
-			return {
-				id: fileId,
-				fileAlgo: f.init.fileAlgo,
-				fileIv: f.init.fileIv,
-				keyAlgo: f.init.keyAlgo,
-				wrappedFileKey: f.init.wrappedFileKey,
-				keyWrapIv: f.init.wrapIv,
-				keyWrapEphemeralPublicKeyJwk: f.init.ephemeralPublicKeyJwk,
-				totalChunks: f.init.totalChunks,
-				ciphertextSha256: f.sha,
-				uploadStatus: f.complete ? 'complete' : 'uploading',
-				metadata: { encryptedBlob: f.init.metadata.encryptedBlob, iv: f.init.metadata.iv, algo: f.init.metadata.algo }
-			};
+		record,
+		versionRecord(fileId: string, versionNumber: number): EncryptedFileRecord {
+			const version = versions.get(fileId)?.find((entry) => entry.versionNumber === versionNumber);
+			if (!version) throw new Error('Unknown archived version');
+			return { ...record(`${fileId}-v${versionNumber}`, version), versionOf: fileId };
 		},
 		restore() {
 			vi.unstubAllGlobals();

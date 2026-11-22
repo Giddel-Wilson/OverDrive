@@ -8,8 +8,10 @@ import {
 	boolean,
 	integer,
 	pgEnum,
-	index
+	index,
+	uniqueIndex
 } from 'drizzle-orm/pg-core';
+import type { AnyPgColumn } from 'drizzle-orm/pg-core';
 
 // ---------------------------------------------------------------------------
 // Enums
@@ -75,6 +77,14 @@ export const users = pgTable('users', {
 	totpEnabled: boolean('totp_enabled').notNull().default(false),
 	totpLastStep: bigint('totp_last_step', { mode: 'number' }),
 
+	// Per-user storage limit in bytes. null = use the server default
+	// (DEFAULT_QUOTA_GB); 0 = unlimited. Set by an admin or by the invite
+	// the account was created with.
+	storageQuotaBytes: bigint('storage_quota_bytes', { mode: 'number' }),
+	// The invite this account was created with (informational, no FK: the
+	// invites table references users, and this keeps the two independent).
+	inviteId: uuid('invite_id'),
+
 	createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 	lastLoginAt: timestamp('last_login_at', { withTimezone: true })
 });
@@ -130,13 +140,28 @@ export const encryptedFiles = pgTable(
 		// 'complete'. Incomplete uploads are resumable (see upload-pipeline).
 		uploadStatus: text('upload_status').notNull().default('complete'),
 
+		// Content revisions keep this file id stable. Replacement uploads are
+		// separate pending rows until their chunks have all been verified.
+		versionNumber: integer('version_number').notNull().default(1),
+		contentUpdatedAt: timestamp('content_updated_at', { withTimezone: true }).notNull().defaultNow(),
+		replacesFileId: uuid('replaces_file_id').references((): AnyPgColumn => encryptedFiles.id, { onDelete: 'cascade' }),
+		baseVersion: integer('base_version'),
+
+		// Browser-generated derivative, encrypted under a distinct HKDF key.
+		// Its immutable object key includes its ciphertext hash.
+		thumbnailIv: text('thumbnail_iv'),
+		thumbnailSha256: text('thumbnail_sha256'),
+		thumbnailSizeBytes: integer('thumbnail_size_bytes').notNull().default(0),
+
 		createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 		// Set = "in the trash". Blobs are only removed on permanent delete.
 		deletedAt: timestamp('deleted_at', { withTimezone: true })
 	},
 	(t) => ({
 		ownerIdx: index('encrypted_files_owner_idx').on(t.ownerId),
-		createdIdx: index('encrypted_files_created_idx').on(t.createdAt)
+		createdIdx: index('encrypted_files_created_idx').on(t.createdAt),
+		storageIdx: index('encrypted_files_storage_idx').on(t.storageKey),
+		replacementIdx: index('encrypted_files_replacement_idx').on(t.replacesFileId)
 	})
 );
 
@@ -196,6 +221,40 @@ export const fileMetadata = pgTable('file_metadata', {
 	strengthLabel: text('strength_label').notNull() // weak | fair | good | strong
 });
 
+// Immutable encrypted revisions. Old chunks stay at their original storage
+// pointer; neither replacing nor restoring a file decrypts anything server-side.
+export const fileVersions = pgTable('file_versions', {
+	id: uuid('id').defaultRandom().primaryKey(),
+	fileId: uuid('file_id').notNull().references(() => encryptedFiles.id, { onDelete: 'cascade' }),
+	versionNumber: integer('version_number').notNull(),
+	storageKey: text('storage_key').notNull(),
+	storageProvider: text('storage_provider').notNull(),
+	ciphertextSizeBytes: bigint('ciphertext_size_bytes', { mode: 'number' }).notNull(),
+	fileAlgo: fileAlgoEnum('file_algo').notNull(),
+	fileIv: text('file_iv').notNull(),
+	fileAuthTag: text('file_auth_tag'),
+	chunked: boolean('chunked').notNull(),
+	chunkSizeBytes: integer('chunk_size_bytes').notNull(),
+	wrappedFileKey: text('wrapped_file_key').notNull(),
+	keyAlgo: keyAlgoEnum('key_algo').notNull(),
+	keyWrapIv: text('key_wrap_iv'),
+	keyWrapEphemeralPublicKeyJwk: jsonb('key_wrap_ephemeral_public_key_jwk'),
+	totalChunks: integer('total_chunks').notNull(),
+	ciphertextSha256: text('ciphertext_sha256').notNull(),
+	thumbnailIv: text('thumbnail_iv'),
+	thumbnailSha256: text('thumbnail_sha256'),
+	thumbnailSizeBytes: integer('thumbnail_size_bytes').notNull().default(0),
+	metadataBlob: text('metadata_blob').notNull(),
+	metadataIv: text('metadata_iv').notNull(),
+	metadataAlgo: fileAlgoEnum('metadata_algo').notNull(),
+	strengthScore: integer('strength_score').notNull(),
+	strengthLabel: text('strength_label').notNull(),
+	createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
+	archivedAt: timestamp('archived_at', { withTimezone: true }).notNull().defaultNow(),
+	// Claim before deleting storage; a version being purged cannot be restored.
+	purgingAt: timestamp('purging_at', { withTimezone: true })
+}, (t) => ({ fileIdx: index('file_versions_file_idx').on(t.fileId, t.versionNumber), storageIdx: index('file_versions_storage_idx').on(t.storageKey) }));
+
 // ---------------------------------------------------------------------------
 // share_links
 // Recipient-less link sharing: file key is re-wrapped under a key derived
@@ -209,6 +268,9 @@ export const shareLinks = pgTable('share_links', {
 		.notNull()
 		.references(() => encryptedFiles.id, { onDelete: 'cascade' }),
 	token: text('token').notNull().unique(), // URL-safe nanoid, lookup handle only
+	// Null = current content. When content changes, existing links are pinned
+	// to the immutable old version whose key was wrapped for this link.
+	versionId: uuid('version_id').references(() => fileVersions.id, { onDelete: 'set null' }),
 
 	wrappedFileKey: text('wrapped_file_key').notNull(),
 	kdf: kdfAlgoEnum('kdf').notNull().default('Argon2id'),
@@ -218,6 +280,10 @@ export const shareLinks = pgTable('share_links', {
 
 	maxDownloads: integer('max_downloads'),
 	downloadCount: integer('download_count').notNull().default(0),
+	// A reserved download can finish all of its chunks after using the last
+	// allowed download. It also pins the revision until the grant expires.
+	downloadGrantUntil: timestamp('download_grant_until', { withTimezone: true }),
+	revocationReason: text('revocation_reason'),
 	expiresAt: timestamp('expires_at', { withTimezone: true }),
 	revokedAt: timestamp('revoked_at', { withTimezone: true }),
 
@@ -251,3 +317,66 @@ export const accessLogs = pgTable(
 		createdIdx: index('access_logs_created_idx').on(t.createdAt)
 	})
 );
+
+// ---------------------------------------------------------------------------
+// sessions
+// One row per signed-in browser. The session cookie is a JWT carrying this
+// row's id (`sid`); every request checks the row, so a session can be
+// revoked server-side ("sign out that device") instead of living until the
+// token expires.
+// ---------------------------------------------------------------------------
+
+export const sessions = pgTable(
+	'sessions',
+	{
+		id: uuid('id').defaultRandom().primaryKey(),
+		userId: uuid('user_id')
+			.notNull()
+			.references(() => users.id, { onDelete: 'cascade' }),
+		// Stable per browser/profile, retained in an HttpOnly cookie across logout.
+		deviceId: uuid('device_id'),
+		// Re-authentication rotates tokens without creating another device row.
+		tokenVersion: integer('token_version').notNull().default(1),
+		createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+		lastSeenAt: timestamp('last_seen_at', { withTimezone: true }).notNull().defaultNow(),
+		expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+		ipAddress: text('ip_address'),
+		userAgent: text('user_agent'),
+		revokedAt: timestamp('revoked_at', { withTimezone: true })
+	},
+	(t) => ({
+		userIdx: index('sessions_user_idx').on(t.userId),
+		deviceUnique: uniqueIndex('sessions_user_device_unique').on(t.userId, t.deviceId)
+	})
+);
+
+// ---------------------------------------------------------------------------
+// invites
+// Sign-up codes. Only a SHA-256 of the code is stored; the plaintext is
+// shown to the admin once, at creation.
+// ---------------------------------------------------------------------------
+
+export const invites = pgTable('invites', {
+	id: uuid('id').defaultRandom().primaryKey(),
+	codeHash: text('code_hash').notNull().unique(),
+	note: text('note'),
+	createdBy: uuid('created_by').references(() => users.id, { onDelete: 'set null' }),
+	maxUses: integer('max_uses').notNull().default(1),
+	uses: integer('uses').notNull().default(0),
+	expiresAt: timestamp('expires_at', { withTimezone: true }),
+	// Storage limit given to accounts created with this invite (null = default).
+	quotaBytes: bigint('quota_bytes', { mode: 'number' }),
+	revokedAt: timestamp('revoked_at', { withTimezone: true }),
+	createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow()
+});
+
+// ---------------------------------------------------------------------------
+// maintenance_state — tiny key/value store for the cleanup job (e.g. where
+// the orphan-chunk sweep left off, so a big bucket is covered across runs).
+// ---------------------------------------------------------------------------
+
+export const maintenanceState = pgTable('maintenance_state', {
+	key: text('key').primaryKey(),
+	value: text('value').notNull(),
+	updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow()
+});

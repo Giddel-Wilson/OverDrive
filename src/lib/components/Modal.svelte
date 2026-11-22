@@ -1,6 +1,7 @@
 <script lang="ts">
 	import type { Snippet } from 'svelte';
 	import { X } from 'lucide-svelte';
+	import { lockBodyScroll } from '$lib/body-scroll-lock';
 
 	let {
 		open,
@@ -9,6 +10,9 @@
 		size = 'md',
 		dismissable = true,
 		scrollable = true,
+		contentClass = '',
+		zIndex = 50,
+		passThrough = false,
 		children
 	}: {
 		open: boolean;
@@ -19,17 +23,19 @@
 		dismissable?: boolean;
 		/** false = content never scrolls (the caller must make it fit). */
 		scrollable?: boolean;
+		contentClass?: string;
+		zIndex?: number;
+		/** Let an external drag reach visible folder targets behind this dialog. */
+		passThrough?: boolean;
 		children: Snippet;
 	} = $props();
 
 	const widths = { sm: 'max-w-sm', md: 'max-w-md', lg: 'max-w-2xl', xl: 'max-w-5xl' } as const;
-	
+
 	// Freeze the page behind the dialog so only the dialog is interactive.
 	$effect(() => {
 		if (!open) return;
-		const previous = document.body.style.overflow;
-		document.body.style.overflow = 'hidden';
-		return () => (document.body.style.overflow = previous);
+		return lockBodyScroll();
 	});
 
 	function onKeydown(e: KeyboardEvent) {
@@ -40,7 +46,7 @@
 <svelte:window onkeydown={open ? onKeydown : undefined} />
 
 {#if open}
-	<div class="fixed inset-0 z-50 flex items-center justify-center p-4">
+	<div class="fixed inset-0 flex items-center justify-center p-4" class:pointer-events-none={passThrough} style:z-index={zIndex}>
 		<button
 			type="button"
 			class="absolute inset-0 cursor-default bg-black/70 backdrop-blur-[2px]"
@@ -53,9 +59,10 @@
 			role="dialog"
 			aria-modal="true"
 			aria-label={title}
-			class="relative flex max-h-[90dvh] w-full {widths[size]} flex-col rounded-[var(--radius-lg)] border border-[var(--color-border-strong)] bg-[var(--color-surface-2)] shadow-2xl"
+			class:pointer-events-auto={passThrough}
+			class="relative flex max-h-[90dvh] w-full {widths[size]} flex-col overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-border-strong)] bg-[var(--color-surface-2)] shadow-2xl"
 		>
-			<div class="flex items-center justify-between gap-3 border-b border-[var(--color-border)] px-5 py-3.5">
+			<div class="flex shrink-0 items-center justify-between gap-3 border-b border-[var(--color-border)] px-5 py-3.5">
 				<h2 class="min-w-0 truncate font-semibold tracking-tight">{title}</h2>
 				{#if dismissable}
 					<button
@@ -68,7 +75,7 @@
 					</button>
 				{/if}
 			</div>
-						<div class="min-h-0 flex-1 p-5 {scrollable ? 'overflow-y-auto' : 'overflow-hidden'}">
+			<div class="m-2 min-h-0 flex-1 p-3 {contentClass} {scrollable ? 'overflow-x-hidden overflow-y-auto' : 'overflow-hidden'}">
 				{@render children()}
 			</div>
 		</div>

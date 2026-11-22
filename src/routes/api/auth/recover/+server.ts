@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { db, users } from '$server/db';
 import { hashPassword } from '$server/auth-server';
 import { logAccess } from '$server/access-log';
+import { revokeSessions } from '$server/sessions';
 import { recentFailedLoginCount, LOGIN_RATE_LIMIT } from '$server/rate-limit';
 import { decoyRecoveryBlob, recoveryTokenMatches } from '$server/recovery';
 import { parseBody } from '$server/validate';
@@ -85,6 +86,9 @@ export const POST: RequestHandler = async ({ request, getClientAddress }) => {
 			totpLastStep: null
 		})
 		.where(eq(users.id, user.id));
+
+	// Recovery means the old password may be compromised: end every session.
+	await revokeSessions(user.id);
 
 	await logAccess({ actorId: user.id, action: 'DECRYPT_ATTEMPT', success: true, failureReason: 'account_recovered', ipAddress: ip });
 	return json({ ok: true });

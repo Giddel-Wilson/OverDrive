@@ -5,6 +5,8 @@
 	import RecoveryKeySettings from '$lib/components/RecoveryKeySettings.svelte';
 	import TwoFactorSettings from '$lib/components/TwoFactorSettings.svelte';
 	import ExportVault from '$lib/components/ExportVault.svelte';
+	import SessionsSettings from '$lib/components/SessionsSettings.svelte';
+	import StorageMeter, { type Usage } from '$lib/components/StorageMeter.svelte';
 	import { ui } from '$lib/ui';
 	import { reWrapPrivateKeyWithNewPassword, unwrapPrivateKey } from '$crypto/private-key';
 	import { keyStore } from '$lib/stores/key-store.svelte';
@@ -21,9 +23,11 @@
 	let hasRecoveryKey = $state(false);
 	let totpEnabled = $state(false);
 	let email = $state('');
+	let usage = $state<Usage | null>(null);
 
 	async function loadAccount() {
-		const [keysRes, meRes] = await Promise.all([fetch('/api/auth/keys'), fetch('/api/auth/me')]);
+		const [keysRes, meRes, usageRes] = await Promise.all([fetch('/api/auth/keys'), fetch('/api/auth/me'), fetch('/api/storage')]);
+		if (usageRes.ok) usage = await usageRes.json();
 		if (keysRes.ok) {
 			const k = await keysRes.json();
 			hasRecoveryKey = k.hasRecoveryKey;
@@ -117,6 +121,15 @@
 			<p class="mt-1 text-sm text-[var(--color-text-tertiary)]">Recovery, sign-in security, backups and your password.</p>
 		</div>
 
+		<section class="{ui.card} space-y-3 p-5" aria-labelledby="sec-storage">
+			<h2 id="sec-storage" class="font-medium">Storage</h2>
+			{#if usage}
+				<StorageMeter {usage} />
+			{:else}
+				<Loader2 class="h-4 w-4 animate-spin text-[var(--color-text-tertiary)]" aria-hidden="true" />
+			{/if}
+		</section>
+
 		<section class="{ui.card} space-y-3 p-5" aria-labelledby="sec-recovery">
 			<h2 id="sec-recovery" class="font-medium">Recovery key</h2>
 			{#if loaded}
@@ -135,6 +148,11 @@
 			{/if}
 		</section>
 
+		<section class="{ui.card} space-y-3 p-5" aria-labelledby="sec-sessions">
+			<h2 id="sec-sessions" class="font-medium">Devices &amp; sessions</h2>
+			<SessionsSettings />
+		</section>
+
 		<section class="{ui.card} space-y-3 p-5" aria-labelledby="sec-export">
 			<h2 id="sec-export" class="font-medium">Export your vault</h2>
 			<ExportVault />
@@ -143,7 +161,7 @@
 		<section class="{ui.card} p-5" aria-labelledby="sec-password">
 			<h2 id="sec-password" class="font-medium">Change password</h2>
 			<p class="mt-1 text-sm text-[var(--color-text-tertiary)]">
-				Your password protects both your login and your private key. Changing it re-encrypts your private key with the new password — entirely
+				Your password protects both your login and your private key. Changing it also signs out your other devices. It re-encrypts your private key with the new password — entirely
 				in your browser. Your recovery key keeps working.
 			</p>
 

@@ -106,10 +106,6 @@ npm run check          # svelte-check — type errors across the whole app
 
 ## Deploy to Vercel
 
-The build and serverless functions use Node.js 24.x. If you override the
-Node.js version in Vercel Project Settings, select **24.x** to match
-`package.json` and `svelte.config.js`.
-
 1. **Backblaze B2** (storage): sign up at backblaze.com (no card required for private buckets) → create a bucket, set it **Private** → Account → Application Keys → **Add a New Application Key**, scoped to that bucket → gives you `B2_KEY_ID` and `B2_APPLICATION_KEY`. The bucket's details page shows its **Endpoint** (e.g. `s3.us-west-004.backblazeb2.com`) and region code (e.g. `us-west-004`).
 2. **Vercel**: import the GitHub repo at vercel.com/new. `vercel.json` + `adapter-vercel` in `svelte.config.js` are already set up — Vercel auto-detects the SvelteKit framework preset.
 3. Add env vars in Project Settings → Environment Variables: `DATABASE_URL`, `SESSION_SECRET`, and the five `B2_*` values from step 1. No `ORIGIN`/`ADDRESS_HEADER`/`BODY_SIZE_LIMIT` needed — those were specific to the previous `adapter-node`/Render setup; `adapter-vercel` already knows how to read client IPs and request origin correctly on Vercel's own infrastructure.
@@ -151,6 +147,14 @@ Backblaze B2 buckets are private by default, so ciphertext is only ever readable
 - `src/lib/stores/key-store.svelte.ts` — holds the unlocked `CryptoKey` objects in memory only, for the current tab. Refreshing the page locks it again by design; `/settings/keys` re-unlocks by re-fetching wrapped material from `/api/auth/keys` and re-deriving the key from a re-entered password.
 - `src/hooks.server.ts` — verifies the session cookie on every request, populates `locals.user`, and applies security headers in production.
 
+## Running it for other people
+
+- **Sign-up is invite-only by default** (`REGISTRATION_MODE`). Open **Admin** (shown for emails in `ADMIN_EMAILS`) → create an invite → send the code or the `/register?invite=…` link. Only a SHA-256 of each code is stored, so it's shown once. Codes can be single- or multi-use, expire, carry their own storage limit, and be revoked. Wrong codes count toward the same per-IP lockout as wrong passwords. On an empty database the first sign-up is always allowed so you can create the admin account.
+- **Storage limits.** `DEFAULT_QUOTA_GB` per account (admin and per-invite overrides; 0 = unlimited). Everything stored counts: finished files, the trash (until purged) and unfinished uploads. Uploads over the limit are refused at `init`, before any encryption work. It's a soft limit — two uploads started in the same instant can both pass. The Vault and Account pages show the meter.
+- **Sessions.** Each sign-in is a row in `sessions`; the cookie's JWT carries its id and every request checks the row, so a device can be signed out immediately (Account → *Devices & sessions*), signing out revokes server-side, changing the password signs out every other device, and account recovery signs out all of them. Cookies issued before this feature carry no session id, so everyone signs in once after upgrading.
+- **Daily cleanup** (`/api/cron/cleanup`, scheduled in `vercel.json`, protected by `CRON_SECRET`): purges trash older than 30 days, discards uploads abandoned for 48 h, deletes expired sessions, and sweeps orphaned chunks (stored objects no database row refers to, older than 24 h) — resuming from a saved cursor so a large bucket is covered over several runs. Vercel Hobby allows daily cron jobs, which is exactly this schedule.
+- **Admin sees** emails, sizes and sign-in times — never file names, keys or content.
+
 ## Recovery, 2FA and export
 
 - **Recovery key.** At sign-up the browser generates 256 random bits and shows them once as a printable kit (52 base32 characters). HKDF derives (a) an AES-GCM key that wraps a *second* copy of the private key and (b) a proof token; the server stores that ciphertext plus only SHA-256 of the proof — never the key. `/recover` fetches the blob (unknown emails get a deterministic same-shaped decoy), opens it with the typed key, re-wraps the **same** private key under a new password, and proves possession with the token. Files stay decryptable; the recovery key stays valid. Existing accounts create one from Account → *Recovery key* (needs the current password). Recovery also turns 2FA off, so a lost phone can't lock you out.
@@ -176,7 +180,71 @@ Backblaze B2 buckets are private by default, so ciphertext is only ever readable
 ## Sharing
 
 - Owner side: `ShareModal.svelte` unwraps the file's real key with the owner's private key, re-wraps it under a share password (Argon2id), and posts the wrapped copy to `POST /api/files/[id]/share`. The server never sees the share password or the underlying file key. Links can have an expiry and/or a max-download count, and are listed/revocable from the same modal.
-- Recipient side: `/share/[token]` needs no account. It fetches public metadata (`GET /api/share/[token]`, still zero-knowledge — the filename is encrypted and only appears after the correct password unwraps it), then the recipient enters the share password, which re-derives the wrapping key and unwraps the file key entirely client-side. Download count increments once per completed download (on the first chunk fetched), not once per chunk.
+- Recipient side: `/share/[token]` needs no account. Metadata and content are decrypted locally after the share password unwraps the key. A download reserves one attempt and uses a signed grant for all its chunks.
+
+## Database backups and recovery
+
+`npm run db:backup` captures all vault tables, enums, constraints, indexes and sequences in one read-only, repeatable-read Neon transaction. It compresses and encrypts the snapshot with an independent AES-256-GCM key, writes it to the private B2 bucket under `_database-backups/v1/`, reads it back, checks its SHA-256 and decrypts it to verify the archive. Previous backups are pruned only after a new one has passed verification. The default retention is 30 days (`BACKUP_RETENTION_DAYS`). An encrypted local copy and a non-secret latest-run report are saved in the ignored `.backups/` folder.
+
+The first local run creates `BACKUP_ENCRYPTION_KEY` in `.env` if it is missing. Keep an offline copy of that key and the deployment's `SESSION_SECRET` (used for stored TOTP secrets). File passwords and recovery keys remain separate. The database backup key is never printed, put in an archive, or returned by an API.
+
+- **Windows schedule:** run `./scripts/install-backup-task.ps1`. The `E2E Database Backup` task runs every four hours from 03:00 local time, as the signed-in user, with hidden windows and catch-up after wake/sign-in. Each run tries up to three times, and Task Scheduler retries failed runs up to three times at ten-minute intervals. `./scripts/verify-backup-task.ps1` runs the registered task and verifies its report. Diagnostics are in `.backups/task-output.log` and `.backups/task-error.log`. Reinstall the task if the workspace moves.
+- **Vercel schedule:** deploy the new routes and `vercel.json`, and set `BACKUP_ENCRYPTION_KEY` and `CRON_SECRET` in the production environment. `/api/cron/backup` runs daily at 02:00 UTC, before the existing cleanup job. Daily schedules work on Hobby; more frequent hosted crons require a plan that supports them. The Vercel job continues when the PC is off.
+- **Backup location:** by default, snapshots use the existing private B2 bucket. Optionally set `B2_BACKUP_BUCKET_NAME` to a separate private bucket accessible to the configured application key. Backups consume bucket space outside per-user file quotas.
+- **Neon PITR:** Project Settings → Restore window controls Neon's own point-in-time history. A non-zero window enables it; use the largest window your plan allows. The separate Snapshots tab does not list these B2 backups. The database connection cannot change the account's restore-window setting.
+- **Status:** Admin → Database backups shows the last successful verified snapshot, failures, retention and whether the hosted schedule has its required secret. Admins can also run a backup there.
+
+Verify the latest local archive by restoring it into a temporary in-memory Postgres database and comparing every table's data:
+
+```powershell
+npm run db:verify-backup
+```
+
+Recover into a **new, empty** Neon database. Set `DATABASE_RESTORE_URL` in `.env` to the new database URL, keep the backup key available, and supply a local archive or its B2 key:
+
+```powershell
+npm run db:restore -- --file .backups/<timestamp>.json.gz.enc
+# Or: npm run db:restore -- --from _database-backups/v1/<timestamp>.json.gz.enc
+```
+
+The restore command refuses the current `DATABASE_URL` and any non-empty target. It recreates schema and rows, applies the current additive migrations and revokes restored sessions in one transaction. Verify the recovered vault before switching the app's `DATABASE_URL`. `--sql-out <path>` exports the snapshot's decrypted SQL for a manual recovery. Database snapshots contain metadata and wrapped keys; they do not copy B2 file chunks, so permanently purged ciphertext stays gone. The exporter supports this vault's schema up to 64 MiB of uncompressed data; use `pg_dump` for a larger database or one with custom views, partitions or row policies.
+
+## Photos and file versions
+
+Photo uploads generate a raster thumbnail in the browser, up to 384 pixels on its longest edge. The thumbnail and its MIME type are encrypted with a separate HKDF-derived AES-GCM key, stored as an immutable B2 object, and included in storage usage. **Photos** browses images across the vault, filters decrypted names locally and lazily fetches only the encrypted derivatives, with four loads at a time. **Create missing thumbnails** performs a one-time browser backfill for existing photos by verifying/decrypting their originals locally. Unsupported image formats and sources over 50 MiB keep a placeholder. Opening a photo uses the existing full-file preview size limits.
+
+File actions → **Version history** provides **Upload new version**, download and restore. Replacements keep the logical file id, name and folder. They use a fresh key/nonce and a separate pending row; only a fully verified upload can replace current content. The old descriptors, metadata, thumbnail and storage pointer are archived atomically. Revision checks also prevent stale renames, moves and replacements from overwriting a newer encryption key.
+
+Regular uploads accept multiple files from the picker or drag-and-drop and upload them in sequence. They also check locally decrypted filenames in the destination folder. If the full filename (including its extension) already exists, **File already exists** asks for **Cancel** or **Continue** before any upload is created. Continue uploads a new version of the existing file; Cancel skips that file. The check refreshes the listing between files, so duplicate names within one batch also prompt. The same filename in another folder and files with different extensions remain separate.
+
+Dragging external files or folders into the app opens the upload modal. Importing and automatic encryption start after the drop, using the open vault folder or the specific folder/breadcrumb they were dropped onto. The backdrop lets an active external drag reach visible folder targets. Nested and empty directories are preserved with encrypted names/parent pointers; matching existing folders are merged, and matching files use the overwrite confirmation. Additional drops queue behind an active upload. Browsers can supply legacy directory entries or File System handles; directory readers are drained across all batches. Reading failures are reported before any folder or upload is created, and an unlocked key is required. Dragging existing vault items still moves them within the vault.
+
+Both encryption options start unselected. Click a selected method again to clear it. After the drop, the system compares AES-GCM and ChaCha20-Poly1305 on this device using synthetic bytes, warm-up runs and median timings for the workload size, then highlights its choice. Both use 256-bit authenticated encryption. Choices are cached for five minutes. The picker also chooses for you when no method was selected; manual choices remain available. New folder metadata uses the measured choice too. The upload card closes after the complete import is saved and the vault listing is refreshed, including empty-folder imports. A preview card also closes when its external drag leaves, is cancelled, or ends without a drop.
+
+The last five revisions (current plus four previous) are kept. Active share links pin older versions until the links end, including an in-flight download's grant. Versions and thumbnails count toward quota; reusing a stored revision on restore counts its objects once. Restore keeps the current name/folder and archives the content it replaces. Cleanup retries failed version purges, protects retained storage during orphan sweeps, and permanent file deletion removes all of the file's revisions and pending replacements.
+
+Apply the additive migration before serving the updated code on an existing deployment:
+
+```powershell
+npm run db:backup
+npm run db:migrate
+```
+
+Fresh databases can use `npm run db:push`. The migration preserves existing file ids, keys, storage pointers and metadata. The vault displays listing errors and a retry button instead of presenting a failed request as an empty account.
+
+## Managing share links
+
+**Links** in the header lists links grouped by file, with local name search, active/ended filters, copying, creation/expiry dates, download counts and revocation. The per-file share dialog uses the same controls. Names are decrypted in the browser, and link passwords are never stored or returned.
+
+Existing links stay bound to the content key they were created for when a file is replaced or restored. A download reserves one attempt and receives a two-hour signed grant, so using the final allowed download does not block its remaining chunks. Every chunk still checks expiry, trash status and revocation, so revoking a link also stops its in-flight requests.
+
+Reaching a download limit automatically marks the link **Revoked · limit reached**, and blocks new admissions. Already admitted downloads can finish with their existing grants; an owner can stop those immediately. Older exhausted links are also revoked when listed or during cleanup. Scrollbars throughout the app use 4-pixel primary-color thumbs with styled, rounded tracks (Firefox uses its native thin scrollbar). Modal scrollbars are inset 8 pixels, and cards clip overflow so the entire scrollbar stays inside the rounded border.
+
+## Device identity
+
+Sessions use a stable random browser/profile id stored in the HttpOnly `e2e_device` cookie. Logout keeps this id. Signing in again updates the existing account/device row instead of creating another entry; its token generation increments so old cookies remain invalid after re-authentication or a later sign-in following revocation. A unique database index enforces one row per account/device. Different browsers remain separate even when their user-agent and IP match.
+
+Existing sessions are adopted on their next authenticated request. Opening Devices & sessions retires other untracked sign-ins for that account once while keeping the current browser signed in; those browsers sign in again to receive an identity. Each browser/profile counts as a device. Folder bulk actions wait for encrypted metadata to finish decrypting before collecting hidden descendants.
 
 ## Testing
 
@@ -184,16 +252,17 @@ Backblaze B2 buckets are private by default, so ciphertext is only ever readable
 
 - **Crypto primitives** — AES-GCM / ChaCha20-Poly1305, RSA-OAEP / ECDH wrapping, PBKDF2 / Argon2id, password wrapping. Each suite asserts decryption **fails** with a tampered ciphertext or the wrong key.
 - **Pipelines** — upload → download round trips against an in-memory fake of the server + B2, including resume (only missing chunks re-sent), transient-failure retries, the relay fallback, empty files, tamper detection, and full-vault export with folder structure.
-- **ZIP64 writer** — read back by `fflate` *and* Python's `zipfile`, with ZIP64 forced on.
+- **ZIP64 writer** — read back by `fflate` and, when installed, Python's `zipfile`, with ZIP64 forced on.
 - **TOTP** — RFC 6238 / RFC 4226 test vectors, window and replay rules.
 - **Every API route** against a real Postgres engine (PGlite, in-process) built from the Drizzle schema, with B2 mocked: registration, login, recovery (incl. lockout and decoys), 2FA lifecycle, the presigned upload protocol, folders, trash/restore/purge, and cross-user isolation.
+- **Database recovery** — encrypted archive integrity, schema/data restoration, exact bigint values, cyclic foreign keys, sequences and retention after verified writes.
+- **UI smoke tests** (`npm run test:ui`) — file listing failures/retry, selection and bulk actions, folders, thumbnails without original downloads, share controls and modal/sheet behavior.
 
 ## Known gaps / possible next steps
 
 - The UI components are type-checked and built in CI-equivalent runs but have no browser-level (Playwright) tests; direct B2 uploads need your real bucket's CORS and have only been exercised against fakes
 - No email verification; passkey 2FA isn't implemented (TOTP only)
 - Downloads still relay through a function (2 MiB chunks); presigned GETs would remove that too
-- Abandoned *uploading* rows and trashed items are never auto-purged — a scheduled cleanup would stop orphaned chunks accumulating
 - Files over 4 GiB open fine in the streaming ZIP64 export, but some older unzip tools handle ZIP64 poorly
 - Share links only support password-based access, not per-recipient public-key sharing (though the schema/crypto primitives for that exist and could be added — see `wrapFileKeyRsa`/`wrapFileKeyEcdh` in `key-encryption.ts`)
 - CSP uses `'unsafe-inline'` for styles (see comment in `hooks.server.ts`) because several components use inline `style=""` for CSS-variable-driven theming; tightening this to nonces is possible but not done here

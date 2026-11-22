@@ -1,16 +1,30 @@
 <script lang="ts">
 	import { page } from '$app/state';
 	import { goto } from '$app/navigation';
-	import { ShieldCheck, Menu, LogOut, Vault, ScrollText, KeyRound, UserRound } from 'lucide-svelte';
+	import { onMount } from 'svelte';
+	import { ShieldCheck, Menu, LogOut, Vault, ScrollText, KeyRound, UserRound, Users, Link2 } from 'lucide-svelte';
 	import BottomSheet from './BottomSheet.svelte';
 	import { keyStore } from '$lib/stores/key-store.svelte';
 
-	const links = [
+	const baseLinks = [
 		{ href: '/dashboard', label: 'Vault', icon: Vault },
+		{ href: '/dashboard/shares', label: 'Links', icon: Link2 },
 		{ href: '/dashboard/logs', label: 'Access logs', icon: ScrollText },
 		{ href: '/settings/keys', label: 'Keys', icon: KeyRound },
 		{ href: '/settings/account', label: 'Account', icon: UserRound }
 	];
+
+	// The Admin link only appears for accounts listed in ADMIN_EMAILS.
+	let isAdmin = $state(false);
+	onMount(async () => {
+		try {
+			const res = await fetch('/api/auth/me');
+			if (res.ok) isAdmin = (await res.json()).isAdmin === true;
+		} catch {
+			/* no admin link — harmless */
+		}
+	});
+	const links = $derived(isAdmin ? [...baseLinks, { href: '/settings/admin', label: 'Admin', icon: Users }] : baseLinks);
 
 	let menuOpen = $state(false);
 

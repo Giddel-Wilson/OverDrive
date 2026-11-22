@@ -69,8 +69,11 @@
 		downloading = true;
 		try {
 			const shared = shareRecordAsEncryptedFileRecord(record);
+			const reservation = await fetch(`/api/share/${token}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ versionNumber: record.versionNumber }) });
+			const admission = await reservation.json();
+			if (!reservation.ok) throw new Error(admission.message ?? 'This download is no longer available');
 			const { blob, metadata: meta } = await downloadAndDecryptFile(shared, fileKey, (i) =>
-				fetch(`/api/share/${token}/chunks/${i}`)
+				fetch(`/api/share/${token}/chunks/${i}?grant=${encodeURIComponent(admission.grant)}`)
 			);
 			triggerBrowserDownload(blob, meta?.name ?? 'decrypted-file');
 			downloaded = true;

@@ -7,6 +7,14 @@ import type { FileAlgo, KeyAlgo } from './types';
 /** Shape returned by GET /api/files (list). */
 export interface EncryptedFileRecord {
 	id: string;
+	versionOf?: string;
+	versionNumber?: number;
+	chunkSizeBytes?: number;
+	archivedAt?: string;
+	contentUpdatedAt?: string;
+	replacesFileId?: string | null;
+	baseVersion?: number | null;
+	thumbnail?: { iv: string; ciphertextSha256: string; sizeBytes: number } | null;
 	fileAlgo: FileAlgo;
 	fileIv: string; // base64
 	keyAlgo: KeyAlgo;
@@ -24,6 +32,7 @@ export interface EncryptedFileRecord {
 
 export interface DecryptedMetadata {
 	name: string;
+	uploadName?: string;
 	mimeType: string;
 	size: number;
 	/** Folder the file lives in (null / absent = vault root). Lives inside the encrypted blob. */
@@ -40,8 +49,10 @@ export interface DownloadProgress {
  * /api/share/[token]/chunks/[index] instead. */
 export type ChunkFetcher = (index: number) => Promise<Response>;
 
-function defaultChunkFetcher(fileId: string): ChunkFetcher {
-	return (index) => fetch(`/api/files/${fileId}/chunks/${index}`);
+function defaultChunkFetcher(record: EncryptedFileRecord): ChunkFetcher {
+	return record.versionOf
+		? (index) => fetch(`/api/files/${record.versionOf}/versions/${record.id}/chunks/${index}`)
+		: (index) => fetch(`/api/files/${record.id}/chunks/${index}?revision=${record.versionNumber ?? 1}`);
 }
 
 /**
@@ -186,7 +197,7 @@ export async function decryptFileToSink(
 	sink: PlaintextSink,
 	opts: { fetchChunk?: ChunkFetcher; onProgress?: (p: DownloadProgress) => void } = {}
 ): Promise<void> {
-	const fetchChunk = opts.fetchChunk ?? defaultChunkFetcher(record.id);
+	const fetchChunk = opts.fetchChunk ?? defaultChunkFetcher(record);
 	const { onProgress } = opts;
 
 	// A missing hash means the upload's finalize step never completed —
@@ -242,7 +253,7 @@ export async function decryptFileToSink(
 export async function downloadAndDecryptFile(
 	record: EncryptedFileRecord,
 	fileKey: Uint8Array,
-	fetchChunk: ChunkFetcher = defaultChunkFetcher(record.id),
+	fetchChunk: ChunkFetcher = defaultChunkFetcher(record),
 	onProgress?: (p: DownloadProgress) => void
 ): Promise<{ blob: Blob; metadata: DecryptedMetadata | null }> {
 	const metadata = await decryptRecordMetadata(record, fileKey);
@@ -259,7 +270,7 @@ export async function downloadAndDecryptFile(
  */
 export async function downloadRawCiphertext(
 	record: EncryptedFileRecord,
-	fetchChunk: ChunkFetcher = defaultChunkFetcher(record.id),
+	fetchChunk: ChunkFetcher = defaultChunkFetcher(record),
 	onProgress?: (p: DownloadProgress) => void
 ): Promise<{ archive: Blob }> {
 	if (!record.ciphertextSha256) {
