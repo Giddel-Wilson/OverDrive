@@ -15,7 +15,8 @@ const config = {
 	preprocess: vitePreprocess(),
 	kit: {
 		adapter: windowsVercelAdapter(adapter({
-			runtime: 'nodejs20.x',
+			// Match the Node.js version declared in package.json.
+			runtime: 'nodejs24.x',
 			// Encryption happens client-side and ciphertext chunks go straight
 			// between the browser and Backblaze B2 through presigned URLs, so
 			// file size isn't bound by Vercel's 4.5MB body limit. Functions
