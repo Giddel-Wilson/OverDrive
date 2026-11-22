@@ -28,7 +28,7 @@
 		result = null;
 		progress = null;
 
-		const filename = `endtoend-encrypt-export-${new Date().toISOString().slice(0, 10)}.zip`;
+		const filename = `overdrive-export-${new Date().toISOString().slice(0, 10)}.zip`;
 
 		// The save dialog needs the click's user gesture, so it opens BEFORE any
 		// network work. Chromium browsers then stream straight to disk (flat

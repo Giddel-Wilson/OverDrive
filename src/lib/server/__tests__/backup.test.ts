@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { PGlite } from '@electric-sql/pglite';
 import { randomBytes } from 'node:crypto';
 import { captureDatabase, encryptSnapshot, decryptSnapshot, restoreStatements, storeVerifiedBackup, BACKUP_PREFIX, type BackupStorage, type SnapshotConnection } from '../backup-core';
+import legacy from '../../shared/__tests__/fixtures/pre-rebrand.json';
 
 function connection(pg: PGlite): SnapshotConnection {
 	return {
@@ -31,6 +32,24 @@ async function fixture() {
 }
 
 describe('database backups', () => {
+	it('authenticates and restores a pre-rebrand archive without rounding existing data', async () => {
+		const pg = new PGlite();
+		try {
+			const archive = Buffer.from(legacy.backup, 'base64');
+			const snapshot = decryptSnapshot(archive, legacy.backupKey);
+			await pg.transaction(async (tx) => {
+				for (const statement of restoreStatements(snapshot)) await tx.query(statement);
+			});
+			expect((await pg.query('SELECT id::text, note FROM public.legacy_files')).rows)
+				.toEqual([{ id: '9007199254740993', note: 'legacy ciphertext metadata' }]);
+			// Relabeling an archive must not bypass authentication of its old AAD.
+			const relabeled = Buffer.concat([Buffer.from('OVERDRIVE-DB-BACKUP-1\n'), archive.subarray(archive.indexOf(10) + 1)]);
+			expect(() => decryptSnapshot(relabeled, legacy.backupKey)).toThrow();
+			archive[archive.length - 20] ^= 1;
+			expect(() => decryptSnapshot(archive, legacy.backupKey)).toThrow();
+		} finally { await pg.close(); }
+	}, 60_000);
+
 	it('restores schema, cyclic foreign keys, enum values, sequences and exact bigint/JSON values', async () => {
 		const pg = await fixture();
 		const restored = new PGlite();
@@ -38,6 +57,8 @@ describe('database backups', () => {
 			const snapshot = await captureDatabase(connection(pg));
 			const key = randomBytes(32).toString('base64');
 			const archive = encryptSnapshot(snapshot, key);
+			expect(snapshot.format).toBe('overdrive-database');
+			expect(archive.subarray(0, 'OVERDRIVE-DB-BACKUP-1\n'.length).toString()).toBe('OVERDRIVE-DB-BACKUP-1\n');
 			expect(archive.toString('utf8')).not.toContain('encrypted');
 			const verified = decryptSnapshot(archive, key);
 			await restored.transaction(async (tx) => {

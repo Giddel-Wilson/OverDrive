@@ -15,7 +15,7 @@
 <svelte:window onkeydown={mobileMenuOpen ? handleKeydown : undefined} />
 
 <svelte:head>
-	<title>EndToEnd Encrypt — files encrypted before they ever leave your device</title>
+	<title>OverDrive — files encrypted before they ever leave your device</title>
 </svelte:head>
 
 <div class="min-h-dvh bg-[var(--color-bg)] text-[var(--color-text-primary)]">
@@ -23,7 +23,7 @@
 		<div class="mx-auto flex max-w-5xl items-center justify-between px-6 py-4">
 			<a href="/" class="flex items-center gap-2" onclick={closeMobileMenu}>
 				<ShieldCheck class="h-5 w-5" style="color: var(--color-accent)" aria-hidden="true" />
-				<span class="font-semibold tracking-tight">EndToEnd Encrypt</span>
+				<span class="font-semibold tracking-tight">OverDrive</span>
 			</a>
 
 			<!-- Desktop nav -->
@@ -172,7 +172,7 @@
 
 	<footer class="border-t border-[var(--color-border)] py-8">
 		<div class="mx-auto max-w-5xl px-6 text-center text-xs text-[var(--color-text-tertiary)]">
-			EndToEnd Encrypt — client-side encrypted file storage.
+			OverDrive — client-side encrypted file storage.
 		</div>
 	</footer>
 </div>

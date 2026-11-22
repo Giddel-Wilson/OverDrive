@@ -1,5 +1,6 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { gzipSync, gunzipSync } from 'node:zlib';
+import { LEGACY_BACKUP_FORMAT, LEGACY_BACKUP_MAGIC } from '../shared/legacy-protocol.js';
 
 /** Portable, ciphertext-only-at-rest snapshots of the vault's Postgres schema and rows. */
 export interface SnapshotConnection {
@@ -37,7 +38,7 @@ interface Sequence {
 	ownerKind: string | null;
 }
 export interface DatabaseSnapshot {
-	format: 'e2e-database';
+	format: 'overdrive-database' | typeof LEGACY_BACKUP_FORMAT;
 	version: 1;
 	createdAt: string;
 	catalog: {
@@ -94,7 +95,8 @@ export const quoteIdentifier = (s: string) => `"${s.replaceAll('"', '""')}"`;
 const qualified = (s: { schema: string; name: string }) => `${quoteIdentifier(s.schema)}.${quoteIdentifier(s.name)}`;
 const literal = (s: string) => `'${s.replaceAll("'", "''")}'`;
 const MAX_SNAPSHOT_BYTES = 64 * 1024 * 1024;
-const MAGIC = Buffer.from('E2E-DB-BACKUP-1\n');
+const MAGIC = Buffer.from('OVERDRIVE-DB-BACKUP-1\n');
+const LEGACY_MAGIC = Buffer.from(LEGACY_BACKUP_MAGIC);
 export const BACKUP_PREFIX = '_database-backups/v1/';
 
 /** All table data and DDL are read in one READ ONLY, REPEATABLE READ transaction. */
@@ -115,7 +117,7 @@ export async function captureDatabase(connection: SnapshotConnection): Promise<D
 		throw new Error('The database schema changed while the backup started. Retry the backup.');
 	}
 	const snapshot: DatabaseSnapshot = {
-		format: 'e2e-database', version: 1, createdAt, catalog,
+		format: 'overdrive-database', version: 1, createdAt, catalog,
 		tables: tables.map((t, i) => ({ schema: t.schema, name: t.name, rows: Number(results[i + 2][0].count), json: String(results[i + 2][0].data) })),
 		sequences: sequences.map((s, i) => ({ schema: s.schema, name: s.name, lastValue: String(results[i + 2 + tables.length][0].value), isCalled: Boolean(results[i + 2 + tables.length][0].called) }))
 	};
@@ -125,7 +127,7 @@ export async function captureDatabase(connection: SnapshotConnection): Promise<D
 
 /** Restore into an empty database. Foreign keys and indexes come after data (including cyclic FKs). */
 export function restoreStatements(snapshot: DatabaseSnapshot): string[] {
-	if (snapshot.format !== 'e2e-database' || snapshot.version !== 1) throw new Error('Unsupported database backup format');
+	if ((snapshot.format !== 'overdrive-database' && snapshot.format !== LEGACY_BACKUP_FORMAT) || snapshot.version !== 1) throw new Error('Unsupported database backup format');
 	const statements = ["SET LOCAL standard_conforming_strings = on", 'SET LOCAL search_path = pg_catalog'];
 	for (const schema of snapshot.catalog.schemas) statements.push(`CREATE SCHEMA IF NOT EXISTS ${quoteIdentifier(schema)}`);
 	for (const extension of snapshot.catalog.extensions) statements.push(`CREATE EXTENSION IF NOT EXISTS ${quoteIdentifier(extension.name)} WITH SCHEMA ${quoteIdentifier(extension.schema)}`);
@@ -181,13 +183,15 @@ export function encryptSnapshot(snapshot: DatabaseSnapshot, encodedKey: string):
 
 export function decryptSnapshot(archive: Uint8Array, encodedKey: string): DatabaseSnapshot {
 	const bytes = Buffer.from(archive);
-	if (bytes.length < MAGIC.length + 28 || !bytes.subarray(0, MAGIC.length).equals(MAGIC)) throw new Error('Invalid database backup');
-	const decipher = createDecipheriv('aes-256-gcm', backupEncryptionKey(encodedKey), bytes.subarray(MAGIC.length, MAGIC.length + 12));
-	decipher.setAAD(MAGIC);
+	// The archive's authenticated prefix determines both its header size and AAD.
+	const magic = [MAGIC, LEGACY_MAGIC].find((header) => bytes.subarray(0, header.length).equals(header));
+	if (!magic || bytes.length < magic.length + 28) throw new Error('Invalid database backup');
+	const decipher = createDecipheriv('aes-256-gcm', backupEncryptionKey(encodedKey), bytes.subarray(magic.length, magic.length + 12));
+	decipher.setAAD(magic);
 	decipher.setAuthTag(bytes.subarray(-16));
-	const compressed = Buffer.concat([decipher.update(bytes.subarray(MAGIC.length + 12, -16)), decipher.final()]);
+	const compressed = Buffer.concat([decipher.update(bytes.subarray(magic.length + 12, -16)), decipher.final()]);
 	const snapshot = JSON.parse(gunzipSync(compressed, { maxOutputLength: MAX_SNAPSHOT_BYTES }).toString('utf8')) as DatabaseSnapshot;
-	if (snapshot.format !== 'e2e-database' || snapshot.version !== 1) throw new Error('Unsupported database backup format');
+	if ((snapshot.format !== 'overdrive-database' && snapshot.format !== LEGACY_BACKUP_FORMAT) || snapshot.version !== 1) throw new Error('Unsupported database backup format');
 	return snapshot;
 }
 

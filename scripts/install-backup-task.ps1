@@ -16,6 +16,6 @@ $firstRun = (Get-Date).Date.Add([TimeSpan]::Parse($At))
 $trigger = New-ScheduledTaskTrigger -Once -At $firstRun -RepetitionInterval (New-TimeSpan -Hours $EveryHours)
 $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 15) -MultipleInstances IgnoreNew -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 10)
 $principal = New-ScheduledTaskPrincipal -UserId ([System.Security.Principal.WindowsIdentity]::GetCurrent().Name) -LogonType Interactive -RunLevel Limited
-$task = Register-ScheduledTask -TaskName 'E2E Database Backup' -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Description "Encrypted and verified Neon database snapshots every $EveryHours hours to Backblaze B2 and the local vault workspace." -Force
+$task = Register-ScheduledTask -TaskName 'OverDrive Database Backup' -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Description "Encrypted and verified Neon database snapshots every $EveryHours hours to Backblaze B2 and the local vault workspace." -Force
 $info = Get-ScheduledTaskInfo -TaskName $task.TaskName
 [pscustomobject]@{ Task = $task.TaskName; State = $task.State; EveryHours = $EveryHours; StartsAt = $At; NextRunTime = $info.NextRunTime; WorkingDirectory = $workspacePath }

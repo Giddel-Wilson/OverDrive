@@ -55,7 +55,7 @@
 </script>
 
 <svelte:head>
-	<title>Encryption keys — EndToEnd Encrypt</title>
+	<title>Encryption keys — OverDrive</title>
 </svelte:head>
 
 <div class="min-h-dvh bg-[var(--color-bg)] text-[var(--color-text-primary)]">

@@ -49,7 +49,7 @@
 	const groups = $derived(files.map((file) => ({ file, links: filtered.filter((link) => link.fileId === file.id) })).filter((group) => group.links.length));
 </script>
 
-<svelte:head><title>Share links — EndToEnd Encrypt</title></svelte:head>
+<svelte:head><title>Share links — OverDrive</title></svelte:head>
 <div class="min-h-dvh bg-[var(--color-bg)] text-[var(--color-text-primary)]">
 	<AppHeader />
 	<main class="mx-auto max-w-5xl space-y-5 px-4 py-8 sm:px-6">

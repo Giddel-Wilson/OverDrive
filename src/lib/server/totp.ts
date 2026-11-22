@@ -97,7 +97,7 @@ export function verifyTotp(
 	return matched;
 }
 
-export function otpauthUri(secretB32: string, accountEmail: string, issuer = 'EndToEnd Encrypt'): string {
+export function otpauthUri(secretB32: string, accountEmail: string, issuer = 'OverDrive'): string {
 	const label = encodeURIComponent(`${issuer}:${accountEmail}`);
 	return `otpauth://totp/${label}?secret=${secretB32}&issuer=${encodeURIComponent(issuer)}&algorithm=SHA1&digits=${TOTP_DIGITS}&period=${TOTP_STEP_SECONDS}`;
 }

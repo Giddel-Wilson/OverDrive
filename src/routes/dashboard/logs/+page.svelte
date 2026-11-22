@@ -23,7 +23,7 @@
 </script>
 
 <svelte:head>
-	<title>Access logs — EndToEnd Encrypt</title>
+	<title>Access logs — OverDrive</title>
 </svelte:head>
 
 <div class="min-h-dvh bg-[var(--color-bg)] text-[var(--color-text-primary)]">

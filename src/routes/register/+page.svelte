@@ -115,14 +115,14 @@
 </script>
 
 <svelte:head>
-	<title>Create account — EndToEnd Encrypt</title>
+	<title>Create account — OverDrive</title>
 </svelte:head>
 
 <div class="flex min-h-dvh items-center justify-center bg-[var(--color-bg)] px-6 py-12 text-[var(--color-text-primary)]">
 	<div class="w-full max-w-sm space-y-6">
 		<div class="flex items-center gap-2">
 			<ShieldCheck class="h-5 w-5" style="color: var(--color-accent)" aria-hidden="true" />
-			<span class="font-semibold tracking-tight">EndToEnd Encrypt</span>
+			<span class="font-semibold tracking-tight">OverDrive</span>
 		</div>
 
 		{#if kit}

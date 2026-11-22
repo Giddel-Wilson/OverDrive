@@ -25,7 +25,7 @@
 	function download() {
 		triggerBrowserDownload(
 			new Blob([recoveryKitText(email, recoveryKey)], { type: 'text/plain' }),
-			'endtoend-encrypt-recovery-kit.txt'
+			'overdrive-recovery-kit.txt'
 		);
 	}
 
@@ -44,9 +44,9 @@
 	function print() {
 		const w = window.open('', '_blank', 'width=760,height=900');
 		if (!w) return;
-		w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>EndToEnd Encrypt — Recovery Kit</title></head>
+		w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>OverDrive — Recovery Kit</title></head>
 <body style="font-family: system-ui, sans-serif; padding: 48px; max-width: 640px; line-height: 1.5; color: #111">
-<h1 style="font-size: 22px; margin: 0 0 4px">EndToEnd Encrypt — Recovery Kit</h1>
+<h1 style="font-size: 22px; margin: 0 0 4px">OverDrive — Recovery Kit</h1>
 <p style="margin: 0 0 28px; color: #555">Keep this page somewhere safe and offline.</p>
 <p style="margin: 0 0 4px"><strong>Account:</strong> ${esc(email)}</p>
 <p style="margin: 0 0 8px"><strong>Recovery key:</strong></p>

@@ -109,7 +109,7 @@
 </script>
 
 <svelte:head>
-	<title>Account — EndToEnd Encrypt</title>
+	<title>Account — OverDrive</title>
 </svelte:head>
 
 <div class="min-h-dvh bg-[var(--color-bg)] text-[var(--color-text-primary)]">

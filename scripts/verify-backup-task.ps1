@@ -1,7 +1,7 @@
 param([ValidateRange(10, 900)][int]$TimeoutSeconds = 180)
 
 $ErrorActionPreference = 'Stop'
-$taskName = 'E2E Database Backup'
+$taskName = 'OverDrive Database Backup'
 $startedAt = Get-Date
 Start-ScheduledTask -TaskName $taskName
 $deadline = $startedAt.AddSeconds($TimeoutSeconds)

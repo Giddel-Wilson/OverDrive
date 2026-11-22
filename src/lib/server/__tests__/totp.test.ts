@@ -51,7 +51,7 @@ describe('TOTP (RFC 6238)', () => {
 	it('builds an otpauth URI authenticator apps accept', () => {
 		const uri = otpauthUri('JBSWY3DPEHPK3PXP', 'a@b.com');
 		expect(uri).toBe(
-			'otpauth://totp/EndToEnd%20Encrypt%3Aa%40b.com?secret=JBSWY3DPEHPK3PXP&issuer=EndToEnd%20Encrypt&algorithm=SHA1&digits=6&period=30'
+			'otpauth://totp/OverDrive%3Aa%40b.com?secret=JBSWY3DPEHPK3PXP&issuer=OverDrive&algorithm=SHA1&digits=6&period=30'
 		);
 	});
 });

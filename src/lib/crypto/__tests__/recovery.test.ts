@@ -11,6 +11,7 @@ import {
 import { generateEcdhKeypair } from '../key-encryption';
 import { importPrivateJwk, unwrapPrivateKeyJwk, wrapPrivateKey } from '../private-key';
 import { DEFAULT_PBKDF2_PARAMS } from '../kdf';
+import legacy from '../../shared/__tests__/fixtures/pre-rebrand.json';
 
 describe('recovery key format', () => {
 	it('is 52 base32 chars in 13 groups and round-trips', () => {
@@ -39,6 +40,14 @@ describe('recovery key format', () => {
 });
 
 describe('recovery wrapping', () => {
+	it('opens a pre-rebrand recovery kit with the original server proof', async () => {
+		// Captured v1 ciphertext with a public, fixed 00..1f test key.
+		const key = Uint8Array.from({ length: 32 }, (_, i) => i);
+		const opened = await unwrapPrivateKeyWithRecovery(legacy.recovery.ciphertext, legacy.recovery.iv, key);
+		expect(opened.privateKeyJwk).toEqual(legacy.recovery.jwk);
+		expect(opened.authToken).toBe(legacy.recovery.authToken);
+	});
+
 	it('derives distinct, deterministic enc/auth material from the same key', async () => {
 		const key = generateRecoveryKey();
 		const a = await deriveRecoveryMaterial(key);

@@ -41,7 +41,7 @@ const Bucket = process.env.B2_BUCKET_NAME;
 
 const rules = [
 	{
-		ID: 'endtoend-encrypt-browser-chunks',
+		ID: 'overdrive-browser-chunks',
 		AllowedOrigins: origins,
 		AllowedMethods: ['PUT', 'GET', 'HEAD'],
 		AllowedHeaders: ['*'],

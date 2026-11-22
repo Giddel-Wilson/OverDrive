@@ -6,19 +6,31 @@ import { and, eq, gt, isNull, sql } from 'drizzle-orm';
 import type { Cookies } from '@sveltejs/kit';
 import { db, sessions } from './db';
 import { SESSION_TOUCH_INTERVAL_MS, retireUntrackedSessions, revokeSession } from './sessions';
+import { LEGACY_DEVICE_COOKIE, LEGACY_SESSION_COOKIE } from '../shared/legacy-protocol.js';
 
-const SESSION_COOKIE = 'e2e_session';
+const SESSION_COOKIE = 'overdrive_session';
 const SESSION_TTL_SECONDS = 60 * 60 * 24 * 30; // 30 days
-const DEVICE_COOKIE = 'e2e_device';
+const DEVICE_COOKIE = 'overdrive_device';
 const DEVICE_TTL_SECONDS = 60 * 60 * 24 * 365;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function deviceCookie(cookies: Cookies): string | undefined {
-	const value = cookies.get(DEVICE_COOKIE);
+	const value = cookies.get(DEVICE_COOKIE) ?? cookies.get(LEGACY_DEVICE_COOKIE);
 	return value && UUID.test(value) ? value.toLowerCase() : undefined;
 }
+
+function removeLegacyCookie(cookies: Cookies, name: string) {
+	if (cookies.get(name) !== undefined) cookies.delete(name, { path: '/' });
+}
+
 function setDeviceCookie(cookies: Cookies, id: string) {
 	cookies.set(DEVICE_COOKIE, id, { path: '/', httpOnly: true, secure: true, sameSite: 'lax', maxAge: DEVICE_TTL_SECONDS });
+	removeLegacyCookie(cookies, LEGACY_DEVICE_COOKIE);
+}
+
+function setSessionCookie(cookies: Cookies, token: string, maxAge: number) {
+	cookies.set(SESSION_COOKIE, token, { path: '/', httpOnly: true, secure: true, sameSite: 'lax', maxAge });
+	removeLegacyCookie(cookies, LEGACY_SESSION_COOKIE);
 }
 
 function secretKey() {
@@ -80,19 +92,14 @@ export async function createSessionCookie(
 		.setExpirationTime(`${SESSION_TTL_SECONDS}s`)
 		.sign(secretKey());
 
-	cookies.set(SESSION_COOKIE, token, {
-		path: '/',
-		httpOnly: true,
-		secure: true,
-		sameSite: 'lax',
-		maxAge: SESSION_TTL_SECONDS
-	});
+	setSessionCookie(cookies, token, SESSION_TTL_SECONDS);
 	setDeviceCookie(cookies, deviceId);
 	return row.id;
 }
 
 export function clearSessionCookie(cookies: Cookies) {
 	cookies.delete(SESSION_COOKIE, { path: '/' });
+	cookies.delete(LEGACY_SESSION_COOKIE, { path: '/' });
 }
 
 /**
@@ -103,7 +110,8 @@ export function clearSessionCookie(cookies: Cookies) {
 export async function readSessionCookie(
 	cookies: Cookies
 ): Promise<{ id: string; email: string; sessionId: string } | null> {
-	const token = cookies.get(SESSION_COOKIE);
+	const currentToken = cookies.get(SESSION_COOKIE);
+	const token = currentToken ?? cookies.get(LEGACY_SESSION_COOKIE);
 	if (!token) return null;
 	try {
 		const { payload } = await jwtVerify(token, secretKey(), { algorithms: ['HS256'] });
@@ -134,12 +142,18 @@ export async function readSessionCookie(
 			if (!deviceId) return null;
 		}
 		if (remembered && remembered !== deviceId) return null;
-		if (!remembered) setDeviceCookie(cookies, deviceId);
+		if (cookies.get(DEVICE_COOKIE)?.toLowerCase() !== deviceId) setDeviceCookie(cookies, deviceId);
+		else removeLegacyCookie(cookies, LEGACY_DEVICE_COOKIE);
 
 		// "Last active" is refreshed at most every few minutes, not on every request.
 		if (Date.now() - row.lastSeenAt.getTime() > SESSION_TOUCH_INTERVAL_MS) {
 			await db.update(sessions).set({ lastSeenAt: new Date() }).where(and(eq(sessions.id, sid), eq(sessions.tokenVersion, version)));
 		}
+		// Promote the same signed token; a rename must not extend its expiry or
+		// allocate a new device/session. A current cookie always takes precedence.
+		if (!currentToken) setSessionCookie(cookies, token, payload.exp === undefined
+			? SESSION_TTL_SECONDS : Math.max(0, Math.floor(payload.exp - Date.now() / 1000)));
+		else removeLegacyCookie(cookies, LEGACY_SESSION_COOKIE);
 		return { id: payload.sub, email: payload.email as string, sessionId: sid };
 	} catch {
 		return null;

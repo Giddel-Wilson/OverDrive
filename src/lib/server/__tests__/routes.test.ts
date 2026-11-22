@@ -129,7 +129,10 @@ import { POST as changePassword } from '../../../routes/api/auth/change-password
 import { GET as me } from '../../../routes/api/auth/me/+server';
 import { GET as cleanupRoute } from '../../../routes/api/cron/cleanup/+server';
 import { handle } from '../../../hooks.server';
-import { SignJWT } from 'jose';
+import { SignJWT, decodeJwt } from 'jose';
+import { downloadGrant, verifyDownloadGrant } from '../shared-files';
+import { LEGACY_DEVICE_COOKIE, LEGACY_SESSION_COOKIE, LEGACY_SHARE_DOWNLOAD_AUDIENCE } from '../../shared/legacy-protocol.js';
+import legacyFixtures from '../../shared/__tests__/fixtures/pre-rebrand.json';
 import { runCleanup } from '../cleanup';
 import { releaseInvite, redeemInvite } from '../invites';
 import { GET as versionList } from '../../../routes/api/files/[id]/versions/+server';
@@ -260,8 +263,8 @@ describe('registration + login', () => {
 		const ok = await doLogin('login@example.com', 'a long enough password');
 		expect(ok.status).toBe(200);
 		expect(ok.body.wrappedPrivateKey).toBeTruthy();
-		expect(ok.cookies.has('e2e_session')).toBe(true);
-		expect(ok.cookies.has('e2e_device')).toBe(true);
+		expect(ok.cookies.has('overdrive_session')).toBe(true);
+		expect(ok.cookies.has('overdrive_device')).toBe(true);
 		expect((await doLogin('login@example.com', 'wrong password!!')).status).toBe(401);
 		expect((await doLogin('nobody@example.com', 'whatever password')).status).toBe(401);
 	});
@@ -351,6 +354,16 @@ describe('account recovery', () => {
 });
 
 describe('TOTP two-factor', () => {
+	it('accepts the original authenticator code for a pre-rebrand stored secret', async () => {
+		const account = await signup('2fa-pre-rebrand@example.com', 'two factor password');
+		await db.update(users).set({ totpEnabled: true, totpSecretEnc: legacyFixtures.totp, totpLastStep: null }).where(eq(users.id, account.user.id));
+		expect((await doLogin(account.user.email, account.password)).body).toEqual({ twoFactorRequired: true });
+		const result = await doLogin(account.user.email, account.password, { totp: totpAt('JBSWY3DPEHPK3PXP', Date.now()) });
+		expect(result.status).toBe(200);
+		expect(result.body.wrappedPrivateKey).toBeTruthy();
+		expect(result.cookies.has('overdrive_session')).toBe(true);
+	});
+
 	it('full lifecycle: setup → enable → login needs a code → replay blocked → disable', async () => {
 		const a = await signup('2fa@example.com', 'two factor password');
 		const me = { user: a.user };
@@ -390,7 +403,7 @@ describe('TOTP two-factor', () => {
 			const good = await doLogin('2fa@example.com', a.password, { totp: code });
 			expect(good.status).toBe(200);
 			expect(good.body.wrappedPrivateKey).toBeTruthy();
-			expect(good.cookies.has('e2e_session')).toBe(true);
+			expect(good.cookies.has('overdrive_session')).toBe(true);
 
 			// same code again = replay
 			expect((await doLogin('2fa@example.com', a.password, { totp: code })).status).toBe(401);
@@ -616,7 +629,7 @@ type Authed = { id: string; email: string; sessionId: string };
 
 /** Pushes a login/register response's cookie through the REAL request hook, as the next request would. */
 async function sessionOf(res: Result): Promise<{ token: string | undefined; user: Authed | null }> {
-	const token = res.cookies.get('e2e_session');
+	const token = res.cookies.get('overdrive_session');
 	const jar = new Map(res.cookies);
 	const event: any = { cookies: { get: (n: string) => jar.get(n), set: (n: string, v: string) => { jar.set(n, v); } }, locals: {} };
 	await handle({ event, resolve: async () => new Response('ok') } as never);
@@ -625,8 +638,8 @@ async function sessionOf(res: Result): Promise<{ token: string | undefined; user
 
 async function hookUser(token: string | undefined, deviceId?: string) {
 	const jar = new Map<string, string>();
-	if (token) jar.set('e2e_session', token);
-	if (deviceId) jar.set('e2e_device', deviceId);
+	if (token) jar.set('overdrive_session', token);
+	if (deviceId) jar.set('overdrive_device', deviceId);
 	const event: any = { cookies: { get: (n: string) => jar.get(n), set: (n: string, v: string) => { jar.set(n, v); } }, locals: {} };
 	await handle({ event, resolve: async () => new Response('ok') } as never);
 	return event.locals.user as Authed | null;
@@ -818,6 +831,52 @@ describe('storage quota and usage', () => {
 
 // ---------------------------------------------------------------------------
 describe('sessions (sign out any device)', () => {
+	it('promotes valid old cookies without extending expiry or duplicating a device, and clears both on logout', async () => {
+		const account = await signup('session-pre-rebrand@example.com', 'device password!!');
+		const deviceId = account.cookies.get('overdrive_device')!;
+		const [before] = await db.select().from(sessions).where(eq(sessions.userId, account.user.id));
+		const token = await new SignJWT({ sub: account.user.id, email: account.user.email, sid: before.id, ver: before.tokenVersion })
+			.setProtectedHeader({ alg: 'HS256' }).setExpirationTime('1h').sign(new TextEncoder().encode(envMock.env.SESSION_SECRET!));
+		const jar = new Map([[LEGACY_SESSION_COOKIE, token], [LEGACY_DEVICE_COOKIE, deviceId]]);
+		const set = vi.fn((name: string, value: string, _options: Record<string, unknown>) => { jar.set(name, value); });
+		const event: any = { cookies: { get: (name: string) => jar.get(name), set, delete: (name: string) => { jar.delete(name); } }, locals: {} };
+		await handle({ event, resolve: async () => new Response('ok') } as never);
+		expect(event.locals.user).toEqual({ ...account.user, sessionId: before.id });
+		expect(jar.get('overdrive_session')).toBe(token);
+		expect(jar.get('overdrive_device')).toBe(deviceId);
+		expect(jar.has(LEGACY_SESSION_COOKIE)).toBe(false);
+		expect(jar.has(LEGACY_DEVICE_COOKIE)).toBe(false);
+		const options = set.mock.calls.find(([name]) => name === 'overdrive_session')![2];
+		expect(options.maxAge).toBeGreaterThan(3590);
+		expect(options.maxAge).toBeLessThanOrEqual(3600);
+		expect(await db.select().from(sessions).where(eq(sessions.userId, account.user.id))).toEqual([before]);
+		jar.set(LEGACY_SESSION_COOKIE, token);
+		await call(logout as Handler, 'POST', '/api/auth/logout', { cookies: jar, user: event.locals.user });
+		expect(jar.has('overdrive_session')).toBe(false);
+		expect(jar.has(LEGACY_SESSION_COOKIE)).toBe(false);
+		expect(jar.get('overdrive_device')).toBe(deviceId);
+		expect(await hookUser(token, deviceId)).toBeNull();
+	});
+
+	it('keeps a legacy device identity when signing in again and gives the current cookie precedence', async () => {
+		const account = await signup('device-pre-rebrand@example.com', 'device password!!');
+		const deviceId = account.cookies.get('overdrive_device')!;
+		const oldToken = account.cookies.get('overdrive_session')!;
+		const jar = new Map([[LEGACY_DEVICE_COOKIE, deviceId]]);
+		const result = await call(login as Handler, 'POST', '/api/auth/login', { cookies: jar, body: { email: account.user.email, password: account.password } });
+		expect(result.status).toBe(200);
+		expect(jar.get('overdrive_device')).toBe(deviceId);
+		expect(jar.has(LEGACY_DEVICE_COOKIE)).toBe(false);
+		expect(await db.select().from(sessions).where(eq(sessions.userId, account.user.id))).toHaveLength(1);
+		const liveToken = jar.get('overdrive_session')!;
+		jar.set('overdrive_session', oldToken);
+		jar.set(LEGACY_SESSION_COOKIE, liveToken);
+		const event: any = { cookies: { get: (name: string) => jar.get(name), set: (name: string, value: string) => { jar.set(name, value); }, delete: (name: string) => { jar.delete(name); } }, locals: {} };
+		await handle({ event, resolve: async () => new Response('ok') } as never);
+		expect(event.locals.user).toBeNull();
+		expect(jar.get('overdrive_session')).toBe(oldToken);
+	});
+
 	it('three sign-ins in one browser keep one device and invalidate the older tokens', async () => {
 		const account = await signup('one-device@example.com', 'device password!!');
 		const jar = new Map(account.cookies);
@@ -828,8 +887,8 @@ describe('sessions (sign out any device)', () => {
 			const result = await call(login as Handler, 'POST', '/api/auth/login', { cookies: jar, body: { email: account.user.email, password: 'device password!!' }, headers: { 'User-Agent': i === 2 ? 'Chrome/130 Windows' : 'Chrome/129 Windows' }, ip: i === 2 ? '10.9.0.2' : '10.9.0.1' });
 			expect(result.status).toBe(200);
 			const current = await sessionOf(result);
-			if (i === 0) { firstToken = current.token; deviceId = jar.get('e2e_device'); sessionId = current.user!.sessionId; }
-			expect(jar.get('e2e_device')).toBe(deviceId);
+			if (i === 0) { firstToken = current.token; deviceId = jar.get('overdrive_device'); sessionId = current.user!.sessionId; }
+			expect(jar.get('overdrive_device')).toBe(deviceId);
 			expect(current.user!.sessionId).toBe(sessionId);
 		}
 		const active = await db.select().from(sessions).where(and(eq(sessions.userId, account.user.id), eq(sessions.deviceId, deviceId!)));
@@ -856,9 +915,9 @@ describe('sessions (sign out any device)', () => {
 		const account = await signup('device-relogin@example.com', 'device password!!');
 		const jar = new Map<string, string>();
 		const before = await sessionOf(await call(login as Handler, 'POST', '/api/auth/login', { cookies: jar, body: { email: account.user.email, password: 'device password!!' } }));
-		const identity = jar.get('e2e_device');
+		const identity = jar.get('overdrive_device');
 		await call(logout as Handler, 'POST', '/api/auth/logout', { cookies: jar, user: before.user });
-		expect(jar.get('e2e_device')).toBe(identity);
+		expect(jar.get('overdrive_device')).toBe(identity);
 		const after = await sessionOf(await call(login as Handler, 'POST', '/api/auth/login', { cookies: jar, body: { email: account.user.email, password: 'device password!!' } }));
 		expect(after.user!.sessionId).toBe(before.user!.sessionId);
 		expect(await hookUser(before.token, identity)).toBeNull();
@@ -1336,6 +1395,21 @@ describe('encrypted thumbnails', () => {
 });
 
 describe('share links and immutable downloads', () => {
+	it('issues OverDrive grants while still verifying unexpired pre-rebrand downloads', async () => {
+		const secret = new TextEncoder().encode(envMock.env.SESSION_SECRET!);
+		const token = 'pre-rebrand-share-token';
+		const oldGrant = await new SignJWT({ token, versionNumber: 2 }).setProtectedHeader({ alg: 'HS256' })
+			.setAudience(LEGACY_SHARE_DOWNLOAD_AUDIENCE).setExpirationTime('1h').sign(secret);
+		expect(await verifyDownloadGrant(oldGrant, token)).toBe(2);
+		await expect(verifyDownloadGrant(oldGrant, 'another-share')).rejects.toMatchObject({ status: 401 });
+		const current = await downloadGrant(token, 2, new Date(Date.now() + 3600_000));
+		expect(decodeJwt(current).aud).toBe('overdrive-share-download');
+		expect(await verifyDownloadGrant(current, token)).toBe(2);
+		const expired = await new SignJWT({ token, versionNumber: 2 }).setProtectedHeader({ alg: 'HS256' })
+			.setAudience(LEGACY_SHARE_DOWNLOAD_AUDIENCE).setExpirationTime(Math.floor(Date.now() / 1000) - 1).sign(secret);
+		await expect(verifyDownloadGrant(expired, token)).rejects.toMatchObject({ status: 401 });
+	});
+
 	it('keeps an existing link decryptable after replacement and lists links only for their owner', async () => {
 		const account = await signup('share-version@example.com');
 		const other = await signup('share-version-other@example.com');

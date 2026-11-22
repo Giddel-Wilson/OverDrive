@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <title>OverDrive</title>
+  <rect width="64" height="64" rx="16" fill="#08090b"/>
+  <g fill="none" stroke="#34e2c4" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M32 12 48 18v12c0 11-6 17-16 22C22 47 16 41 16 30V18Z"/>
+    <path d="m24 31 6 6 12-12"/>
+  </g>
+</svg>

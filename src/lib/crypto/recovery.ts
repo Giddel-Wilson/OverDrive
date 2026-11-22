@@ -1,4 +1,5 @@
 import { toBase64, fromBase64 } from './encoding';
+import { RECOVERY_SALT_V1 } from '../shared/legacy-protocol.js';
 
 /**
  * Account recovery key.
@@ -13,7 +14,7 @@ import { toBase64, fromBase64 } from './encoding';
  */
 
 const B32 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
-const HKDF_SALT = new TextEncoder().encode('endtoend-encrypt/recovery/v1');
+const HKDF_SALT = new TextEncoder().encode(RECOVERY_SALT_V1);
 
 export function generateRecoveryKey(): Uint8Array {
 	return crypto.getRandomValues(new Uint8Array(32));
@@ -114,7 +115,7 @@ export async function unwrapPrivateKeyWithRecovery(
 /** Plain-text kit the user can save or print. Contains the recovery key — treat as a secret. */
 export function recoveryKitText(email: string, formattedKey: string): string {
 	return [
-		'EndToEnd Encrypt — Recovery Kit',
+		'OverDrive — Recovery Kit',
 		'================================',
 		'',
 		`Account:       ${email}`,

@@ -1,0 +1,16 @@
+{
+  "recovery": {
+    "jwk": { "kty": "EC", "crv": "P-256", "x": "legacy-x", "y": "legacy-y", "d": "legacy-private-key", "ext": true },
+    "authToken": "cfc8b9dbca34b2367a1ea3f2ffb508c95e720270ccf49b60a9e34a77684247e3",
+    "iv": "AAECAwQFBgcICQoL",
+    "ciphertext": "iq/QCXhSslwjJYgv1wkzub5A2pLOlEuZdUZ2EfVH+tj8hTXblfdMzefADVs6y6n82PznDBhA22R1zv6kxvvI945CQXly3X4TKYfnWDwD6yDQrn0XGN5Zs2nTwfN44gWSJ38E4NY52lrAYh7v"
+  },
+  "thumbnail": {
+    "iv": "AAECAwQFBgcICQoL",
+    "ciphertext": "+vxPmV7QxOLjaXUtN3L6SmVYQuPtEPar3WHC9Y/MAS4asQ==",
+    "sha256": "61f6c02d7eb6232f65b3ba385528277cf3f7ef267465b635a71e0b769bcea970"
+  },
+  "totp": "AAECAwQFBgcICQoL/9n787F5IzQ/4c8vwu84K8zrdmjj1LaD35r+zSPRFDY=",
+  "backup": "RTJFLURCLUJBQ0tVUC0xCgABAgMEBQYHCAkKC1iJ3hvF5cIbjUsi2XCHo12PKxLUbS0fZVzQvuTAE+gTGUa6IYGcfoz+aduH7V29kMMY8PJFMhkBtUosFchi4RYuH9kDE7cu3AlM+ickQYS148KZmjhC6emc9xv66OVTo7mh8C0rimpCCPnp8FPo/gQXklWDV5OJhfvPUAl0ZxQV2gQYFW5s3d4KkKJSatQ7gKoNBGnZy8DE0/7Y2LrXX9NSV03DXwQ382z21xc/00mUBXcIV9s7jiSGahv950mpFyk1hdksTJSOLM1vJsqzh+WqMtl5OgOSSf/JBiueLtASejJjW+QaqXrQe7D1IwWmrLdSnzpWYQvQOwRBjVgPuXCdJ6Lo70aBeTsF/Jr7Vv7HN2EtRlswRAi6lKhq3WmauDvttn+DGiojXP7JABhSlF3bUoEDfFOwTcwpY9J+sVsKHVKVekgVTaUGFQJxCDaa0WApitE7vhsE5MKS/+5g8g7Ybc+vVMeqt7+aKi5pX5fQl3A1I+Q7AsGfYKFYMbjB0s9BJotfwcQ5Vg==",
+  "backupKey": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8="
+}

@@ -2,6 +2,7 @@ import { decryptBlob, encryptBlob, createSha256Stream } from './file-encryption'
 import { fromBase64, toBase64 } from './encoding';
 import { createBlobSink, decryptFileToSink, decryptRecordMetadata, unwrapRecordFileKey, type EncryptedFileRecord } from './download-pipeline';
 import { MAX_THUMBNAIL_BYTES, MAX_THUMBNAIL_SOURCE_BYTES, THUMBNAIL_EDGE } from '../shared/limits';
+import { THUMBNAIL_INFO_V1 } from '../shared/legacy-protocol.js';
 
 export interface EncryptedThumbnail { encryptedBlob: string; iv: string; ciphertextSha256: string }
 
@@ -10,7 +11,7 @@ const thumbnailMime = new Set(['image/webp', 'image/jpeg', 'image/png']);
 
 async function thumbnailKey(fileKey: Uint8Array): Promise<Uint8Array> {
 	const key = await crypto.subtle.importKey('raw', Uint8Array.from(fileKey).buffer, 'HKDF', false, ['deriveBits']);
-	return new Uint8Array(await crypto.subtle.deriveBits({ name: 'HKDF', hash: 'SHA-256', salt: new ArrayBuffer(0), info: new TextEncoder().encode('e2e-file-thumbnail:v1') }, key, 256));
+	return new Uint8Array(await crypto.subtle.deriveBits({ name: 'HKDF', hash: 'SHA-256', salt: new ArrayBuffer(0), info: new TextEncoder().encode(THUMBNAIL_INFO_V1) }, key, 256));
 }
 
 /** Rasterize locally. Unsupported formats and oversized sources keep a placeholder. */

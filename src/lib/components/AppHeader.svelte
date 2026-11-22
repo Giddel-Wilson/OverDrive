@@ -55,7 +55,7 @@
 	<div class="mx-auto flex max-w-5xl items-center justify-between px-6 py-4">
 		<a href="/dashboard" class="flex items-center gap-2">
 			<ShieldCheck class="h-5 w-5" style="color: var(--color-accent)" aria-hidden="true" />
-			<span class="font-semibold tracking-tight">EndToEnd Encrypt</span>
+			<span class="font-semibold tracking-tight">OverDrive</span>
 		</a>
 
 		<!-- Desktop / tablet navigation -->
@@ -92,7 +92,7 @@
 	<BottomSheet open={menuOpen} title="Menu" onClose={() => (menuOpen = false)}>
 		<div class="flex items-center gap-2 px-5 pb-1 pt-2">
 			<ShieldCheck class="h-4 w-4" style="color: var(--color-accent)" aria-hidden="true" />
-			<span class="text-sm font-medium tracking-tight">EndToEnd Encrypt</span>
+			<span class="text-sm font-medium tracking-tight">OverDrive</span>
 		</div>
 
 		<nav class="p-2" aria-label="Main">

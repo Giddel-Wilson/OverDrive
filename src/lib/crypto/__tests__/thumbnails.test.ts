@@ -2,8 +2,17 @@ import { describe, it, expect } from 'vitest';
 import { encryptPhotoThumbnail, decryptPhotoThumbnail, createPhotoThumbnail } from '../thumbnails';
 import { generateFileKey, decryptBlob } from '../file-encryption';
 import { fromBase64 } from '../encoding';
+import legacy from '../../shared/__tests__/fixtures/pre-rebrand.json';
 
 describe('encrypted photo thumbnails', () => {
+	it('decrypts an existing v1 thumbnail after the rebrand', async () => {
+		const ciphertext = fromBase64(legacy.thumbnail.ciphertext);
+		const manifest = { iv: legacy.thumbnail.iv, ciphertextSha256: legacy.thumbnail.sha256, sizeBytes: ciphertext.length };
+		const restored = await decryptPhotoThumbnail(ciphertext, manifest, Uint8Array.from({ length: 32 }, (_, i) => i));
+		expect(restored.type).toBe('image/png');
+		expect(new Uint8Array(await restored.arrayBuffer())).toEqual(new Uint8Array([137, 80, 78, 71, 1, 2, 3, 4]));
+	});
+
 	it('round-trips the derivative and its MIME type with a separate key from the original', async () => {
 		const key = generateFileKey();
 		const image = new Blob([new Uint8Array([137, 80, 78, 71, 1, 2, 3, 4])], { type: 'image/png' });

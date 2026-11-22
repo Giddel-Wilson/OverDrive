@@ -155,7 +155,7 @@
 </script>
 
 <svelte:head>
-	<title>Admin — EndToEnd Encrypt</title>
+	<title>Admin — OverDrive</title>
 </svelte:head>
 
 <div class="min-h-dvh bg-[var(--color-bg)] text-[var(--color-text-primary)]">

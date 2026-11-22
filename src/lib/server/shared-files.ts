@@ -3,6 +3,7 @@ import { and, eq, isNull, sql } from 'drizzle-orm';
 import { SignJWT, jwtVerify } from 'jose';
 import { env } from '$env/dynamic/private';
 import { db, shareLinks, encryptedFiles, fileVersions, fileMetadata } from './db';
+import { LEGACY_SHARE_DOWNLOAD_AUDIENCE } from '../shared/legacy-protocol.js';
 
 /** One SQL snapshot pairs the link's wrapped key with the correct immutable content. */
 export async function sharedFile(token: string, checkLimit = true, allowAdmittedDownload = false) {
@@ -36,7 +37,7 @@ export async function autoRevokeLimitedLinks(scope: { ownerId?: string; fileId?:
 	return rows.length;
 }
 
-const audience = 'e2e-share-download';
+const audience = 'overdrive-share-download';
 const signingKey = () => {
 	if (!env.SESSION_SECRET) error(503, 'Sharing is not configured');
 	return new TextEncoder().encode(env.SESSION_SECRET);
@@ -50,7 +51,7 @@ export async function downloadGrant(token: string, versionNumber: number, until:
 export async function verifyDownloadGrant(grant: string | null, token: string): Promise<number> {
 	if (!grant || grant.length > 2048) error(401, 'Start a download from the shared-file page first');
 	try {
-		const { payload } = await jwtVerify(grant, signingKey(), { audience, algorithms: ['HS256'] });
+		const { payload } = await jwtVerify(grant, signingKey(), { audience: [audience, LEGACY_SHARE_DOWNLOAD_AUDIENCE], algorithms: ['HS256'] });
 		if (payload.token !== token || !Number.isInteger(payload.versionNumber)) error(401, 'Invalid download grant');
 		return payload.versionNumber as number;
 	} catch { error(401, 'The download grant expired. Start the download again.'); }

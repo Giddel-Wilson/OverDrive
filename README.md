@@ -1,4 +1,4 @@
-# EndToEnd Encrypt
+# OverDrive
 
 Secure file storage and sharing with client-side encryption. Files are
 encrypted **in the browser** before a single byte leaves the device — the
@@ -188,7 +188,7 @@ Backblaze B2 buckets are private by default, so ciphertext is only ever readable
 
 The first local run creates `BACKUP_ENCRYPTION_KEY` in `.env` if it is missing. Keep an offline copy of that key and the deployment's `SESSION_SECRET` (used for stored TOTP secrets). File passwords and recovery keys remain separate. The database backup key is never printed, put in an archive, or returned by an API.
 
-- **Windows schedule:** run `./scripts/install-backup-task.ps1`. The `E2E Database Backup` task runs every four hours from 03:00 local time, as the signed-in user, with hidden windows and catch-up after wake/sign-in. Each run tries up to three times, and Task Scheduler retries failed runs up to three times at ten-minute intervals. `./scripts/verify-backup-task.ps1` runs the registered task and verifies its report. Diagnostics are in `.backups/task-output.log` and `.backups/task-error.log`. Reinstall the task if the workspace moves.
+- **Windows schedule:** run `./scripts/install-backup-task.ps1`. The `OverDrive Database Backup` task runs every four hours from 03:00 local time, as the signed-in user, with hidden windows and catch-up after wake/sign-in. Each run tries up to three times, and Task Scheduler retries failed runs up to three times at ten-minute intervals. `./scripts/verify-backup-task.ps1` runs the registered task and verifies its report. Diagnostics are in `.backups/task-output.log` and `.backups/task-error.log`. Reinstall the task if the workspace moves.
 - **Vercel schedule:** deploy the new routes and `vercel.json`, and set `BACKUP_ENCRYPTION_KEY` and `CRON_SECRET` in the production environment. `/api/cron/backup` runs daily at 02:00 UTC, before the existing cleanup job. Daily schedules work on Hobby; more frequent hosted crons require a plan that supports them. The Vercel job continues when the PC is off.
 - **Backup location:** by default, snapshots use the existing private B2 bucket. Optionally set `B2_BACKUP_BUCKET_NAME` to a separate private bucket accessible to the configured application key. Backups consume bucket space outside per-user file quotas.
 - **Neon PITR:** Project Settings → Restore window controls Neon's own point-in-time history. A non-zero window enables it; use the largest window your plan allows. The separate Snapshots tab does not list these B2 backups. The database connection cannot change the account's restore-window setting.
@@ -242,9 +242,15 @@ Reaching a download limit automatically marks the link **Revoked · limit reache
 
 ## Device identity
 
-Sessions use a stable random browser/profile id stored in the HttpOnly `e2e_device` cookie. Logout keeps this id. Signing in again updates the existing account/device row instead of creating another entry; its token generation increments so old cookies remain invalid after re-authentication or a later sign-in following revocation. A unique database index enforces one row per account/device. Different browsers remain separate even when their user-agent and IP match.
+Sessions use a stable random browser/profile id stored in the HttpOnly `overdrive_device` cookie. Logout keeps this id. Signing in again updates the existing account/device row instead of creating another entry; its token generation increments so old cookies remain invalid after re-authentication or a later sign-in following revocation. A unique database index enforces one row per account/device. Different browsers remain separate even when their user-agent and IP match.
 
 Existing sessions are adopted on their next authenticated request. Opening Devices & sessions retires other untracked sign-ins for that account once while keeping the current browser signed in; those browsers sign in again to receive an identity. Each browser/profile counts as a device. Folder bulk actions wait for encrypted metadata to finish decrypting before collecting hidden descendants.
+
+## Rebranding compatibility
+
+OverDrive keeps existing accounts, encrypted files, thumbnails, recovery keys and two-factor secrets readable without a database migration or re-encryption. Immutable v1 derivation labels live in `src/lib/shared/legacy-protocol.js`. New database archives use the OverDrive header, and the restore tools also authenticate and read older archives. Existing share-download grants remain valid until their original expiry.
+
+On the same origin, valid older cookies are promoted to `overdrive_session` and `overdrive_device` without changing the session token, expiry or device id. Logout clears both session-cookie names. Cookies are scoped to an origin, so a new deployment domain requires a sign-in there; keep the previous domain attached to the same Vercel project for existing bookmarks and share links. Keep the same Neon database, B2 bucket, `SESSION_SECRET` and backup encryption key during the rename. After moving the local workspace to `OverDrive`, reinstall and verify the **OverDrive Database Backup** task from that directory before retiring the old task.
 
 ## Testing
 

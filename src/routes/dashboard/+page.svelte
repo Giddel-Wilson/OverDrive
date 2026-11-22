@@ -1021,7 +1021,7 @@
 				sub.folderIds.forEach((id) => folderIds.add(id));
 			}
 			await zipExport(
-				`endtoend-selection-${new Date().toISOString().slice(0, 10)}.zip`,
+				`overdrive-selection-${new Date().toISOString().slice(0, 10)}.zip`,
 				files.filter((f) => fileIds.has(f.id)),
 				folderRecords.filter((f) => folderIds.has(f.id)),
 				`${items.length} items`
@@ -1087,7 +1087,7 @@
 </script>
 
 <svelte:head>
-	<title>EndToEnd Encrypt — Vault</title>
+	<title>OverDrive — Vault</title>
 </svelte:head>
 
 <svelte:window onkeydown={onKey} />
