@@ -1,4 +1,4 @@
-1. Invite-only sign-up, per-user storage quota and a usage meter. Sign-up is open and there's no quota, so anyone with your URL can fill your B2 bucket. This is small and the most urgent.
+1. Open sign-up with a separate private vault per account, per-user storage quotas and a usage meter.
 2. Automatic cleanup (a Vercel Cron job).
 - Delete trash after 30 days.
 - Delete abandoned uploads, with their stored chunks.

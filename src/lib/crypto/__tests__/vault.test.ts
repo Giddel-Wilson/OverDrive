@@ -84,6 +84,8 @@ describe.each([
 	['ECDH-P256', generateEcdhKeypair],
 	['RSA-OAEP', generateRsaKeypair]
 ] as const)('encrypted folder + metadata round trips (%s)', (keyAlgo, gen) => {
+	// 4096-bit RSA generation can exceed the default timeout under parallel load.
+	const roundTripTimeoutMs = keyAlgo === 'RSA-OAEP' ? 30_000 : 5_000;
 	it('creates, decrypts, renames and moves a folder without the server learning names', async () => {
 		const kp = await gen();
 		const payload = await createFolderPayload('Tax returns', null, keyAlgo, kp.publicKey);
@@ -98,7 +100,7 @@ describe.each([
 
 		const moved = await reencryptFolderMeta({ ...record, ...renamed }, kp.privateKey, { parentId: 'parent-1' });
 		expect(await decryptFolderMeta({ ...record, ...moved }, kp.privateKey)).toEqual({ name: 'Taxes', parentId: 'parent-1' });
-	});
+	}, roundTripTimeoutMs);
 
 	it('renames / moves a file by re-encrypting only its metadata blob', async () => {
 		const kp = await gen();
@@ -122,5 +124,5 @@ describe.each([
 		const updated: EncryptedFileRecord = { ...record, metadata: { ...record.metadata!, ...patch } };
 		const key = await unwrapRecordFileKey(updated, kp.privateKey);
 		expect(await decryptRecordMetadata(updated, key)).toEqual({ name: 'b.txt', mimeType: 'text/plain', size: 3, folderId: 'folder-9' });
-	});
+	}, roundTripTimeoutMs);
 });

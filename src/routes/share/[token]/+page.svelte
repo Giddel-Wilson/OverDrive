@@ -53,11 +53,17 @@
 		try {
 			const key = await unwrapShareFileKey(record, password);
 			const shared = shareRecordAsEncryptedFileRecord(record);
-			const meta = await decryptRecordMetadata(shared, key);
+			let meta: DecryptedMetadata | null;
+			try {
+				meta = await decryptRecordMetadata(shared, key);
+				if (!meta) throw new Error('Missing file metadata');
+			} catch {
+				throw new Error('The password unlocked the link, but its file details could not be decrypted. Ask the sender for a new link.');
+			}
 			fileKey = key;
 			metadata = meta;
 		} catch (e) {
-			unlockError = e instanceof Error ? e.message : 'Incorrect password';
+			unlockError = e instanceof Error ? e.message : 'Could not unlock this shared file. Reload the page and try again.';
 		} finally {
 			unlocking = false;
 		}

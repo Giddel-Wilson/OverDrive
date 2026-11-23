@@ -17,12 +17,11 @@ const mem = vi.hoisted(() => ({
 	failDeletes: new Set<string>()
 }));
 
-// Mutable so tests can switch REGISTRATION_MODE, quotas, etc. (modules read env at call time).
+// Mutable so tests can switch quotas and admin settings. (modules read env at call time).
 const envMock = vi.hoisted(() => ({
 	env: {
 		SESSION_SECRET: 'test-session-secret-0123456789abcdef',
 		DATABASE_URL: 'x',
-		REGISTRATION_MODE: 'open',
 		ADMIN_EMAILS: 'admin@example.com',
 		CRON_SECRET: 'cron-secret-0123456789abcdef'
 	} as Record<string, string | undefined>
@@ -92,7 +91,7 @@ vi.mock('$server/db', async () => {
 	};
 });
 
-import { db, users, encryptedFiles, fileVersions, fileMetadata, shareLinks, folders, accessLogs, sessions, invites, maintenanceState } from '$server/db';
+import { db, users, encryptedFiles, fileVersions, fileMetadata, shareLinks, folders, accessLogs, sessions, maintenanceState } from '$server/db';
 import { totpAt, base32Decode } from '../totp';
 import { generateEcdhKeypair } from '$crypto/key-encryption';
 import { wrapPrivateKey, importPrivateJwk, unwrapPrivateKeyJwk } from '$crypto/private-key';
@@ -117,8 +116,6 @@ import { GET as listFolders, POST as createFolder } from '../../../routes/api/fo
 import { PATCH as patchFolder } from '../../../routes/api/folders/[id]/+server';
 import { POST as trash } from '../../../routes/api/trash/+server';
 import { GET as getRegistration } from '../../../routes/api/auth/registration/+server';
-import { GET as listInvitesH, POST as createInvite } from '../../../routes/api/admin/invites/+server';
-import { DELETE as revokeInvite } from '../../../routes/api/admin/invites/[id]/+server';
 import { GET as adminUsers } from '../../../routes/api/admin/users/+server';
 import { PATCH as patchUser } from '../../../routes/api/admin/users/[id]/+server';
 import { GET as storage } from '../../../routes/api/storage/+server';
@@ -134,7 +131,6 @@ import { downloadGrant, verifyDownloadGrant } from '../shared-files';
 import { LEGACY_DEVICE_COOKIE, LEGACY_SESSION_COOKIE, LEGACY_SHARE_DOWNLOAD_AUDIENCE } from '../../shared/legacy-protocol.js';
 import legacyFixtures from '../../shared/__tests__/fixtures/pre-rebrand.json';
 import { runCleanup } from '../cleanup';
-import { releaseInvite, redeemInvite } from '../invites';
 import { GET as versionList } from '../../../routes/api/files/[id]/versions/+server';
 import { POST as versionRestore } from '../../../routes/api/files/[id]/versions/[versionId]/+server';
 import { GET as versionChunk } from '../../../routes/api/files/[id]/versions/[versionId]/chunks/[index]/+server';
@@ -193,7 +189,7 @@ async function call(handler: Handler, method: string, path: string, opts: { body
 let ipCounter = 0;
 const freshIp = () => `10.1.${Math.floor(++ipCounter / 250)}.${ipCounter % 250}`;
 
-async function buildRegistration(email: string, password: string, inviteCode?: string) {
+async function buildRegistration(email: string, password: string) {
 	const kp = await generateEcdhKeypair();
 	const wrapped = await wrapPrivateKey(kp.privateKey, password, DEFAULT_PBKDF2_PARAMS);
 	const jwk = await crypto.subtle.exportKey('jwk', kp.privateKey);
@@ -206,15 +202,14 @@ async function buildRegistration(email: string, password: string, inviteCode?: s
 		publicKeyJwk: await crypto.subtle.exportKey('jwk', kp.publicKey),
 		keyAlgo: 'ECDH-P256',
 		...wrapped,
-		...rec,
-		...(inviteCode ? { inviteCode } : {})
+		...rec
 	};
 	return { body, kp, jwk, recoveryKey };
 }
 
-/** Registers via the real handler and returns the raw response (for invite / mode tests). */
-async function registerRaw(email: string, inviteCode?: string, ip = freshIp(), password = 'correct horse battery') {
-	const { body } = await buildRegistration(email, password, inviteCode);
+/** Registers via the real handler and returns the raw response (for registration tests). */
+async function registerRaw(email: string, ip = freshIp(), password = 'correct horse battery') {
+	const { body } = await buildRegistration(email, password);
 	return call(register as Handler, 'POST', '/api/auth/register', { body, ip });
 }
 
@@ -232,23 +227,47 @@ const doLogin = (email: string, password: string, extra: Record<string, unknown>
 // ---------------------------------------------------------------------------
 // Runs FIRST on purpose: it needs a deployment with no users yet.
 describe('first account on an empty server', () => {
-	it('can sign up even when the server is invite-only, and becomes the admin', async () => {
-		envMock.env.REGISTRATION_MODE = 'invite';
-		try {
-			expect((await call(getRegistration as Handler, 'GET', '/api/auth/registration')).body).toEqual({ mode: 'open', bootstrap: true });
-			const res = await registerRaw('admin@example.com'); // no invite code
-			expect(res.status).toBe(200);
-			expect((await call(getRegistration as Handler, 'GET', '/api/auth/registration')).body).toEqual({ mode: 'invite', bootstrap: false });
-			// from now on, no code = refused
-			expect((await registerRaw('second@example.com')).status).toBe(403);
-		} finally {
-			envMock.env.REGISTRATION_MODE = 'open';
-		}
+	it('keeps registration open after the first account, with separate keys and admin permissions', async () => {
+		expect((await call(getRegistration as Handler, 'GET', '/api/auth/registration')).body).toEqual({ mode: 'open', bootstrap: true });
+		const admin = await registerRaw('admin@example.com');
+		expect(admin.status).toBe(200);
+		expect((await call(getRegistration as Handler, 'GET', '/api/auth/registration')).body).toEqual({ mode: 'open', bootstrap: false });
+		const second = await registerRaw('second@example.com');
+		expect(second.status).toBe(200);
+		const account = await sessionOf(second);
+		expect((await call(me as Handler, 'GET', '/api/auth/me', { user: account.user })).body.isAdmin).toBe(false);
+		expect((await call(adminUsers as Handler, 'GET', '/api/admin/users', { user: account.user })).status).toBe(403);
+		const rows = await db.select().from(users);
+		expect(rows).toHaveLength(2);
+		expect(rows[0].publicKeyJwk).not.toEqual(rows[1].publicKeyJwk);
+		expect(rows[0].wrappedPrivateKey).not.toEqual(rows[1].wrappedPrivateKey);
+		expect(rows.every(row => row.storageQuotaBytes === null)).toBe(true);
 	});
 });
 
 // ---------------------------------------------------------------------------
 describe('registration + login', () => {
+	it('allows public registration even with a retired deployment setting', async () => {
+		envMock.env.REGISTRATION_MODE = 'invite';
+		try {
+			expect((await call(getRegistration as Handler, 'GET', '/api/auth/registration')).body.mode).toBe('open');
+			expect((await registerRaw('public-registration@example.com')).status).toBe(200);
+		} finally { delete envMock.env.REGISTRATION_MODE; }
+	});
+
+	it('concurrent registrations keep one account and the winning encryption keys', async () => {
+		const email = 'registration-race@example.com';
+		const payloads = await Promise.all([buildRegistration(email, 'registration password'), buildRegistration(email, 'registration password')]);
+		const results = await Promise.all(payloads.map(({ body }) => call(register as Handler, 'POST', '/api/auth/register', { body, ip: freshIp() })));
+		expect(results.map(result => result.status).sort()).toEqual([200, 409]);
+		const winner = results.findIndex(result => result.status === 200);
+		const rows = await db.select().from(users).where(eq(users.email, email));
+		expect(rows).toHaveLength(1);
+		expect(rows[0].publicKeyJwk).toEqual(payloads[winner].body.publicKeyJwk);
+		expect(rows[0].wrappedPrivateKey).toBe(payloads[winner].body.wrappedPrivateKey);
+		expect(await db.select().from(sessions).where(eq(sessions.userId, rows[0].id))).toHaveLength(1);
+	});
+
 	it('stores only a hash of the proof token, never the recovery key', async () => {
 		const a = await signup('reg@example.com');
 		const [row] = await db.select().from(users).where(eq(users.id, a.user.id));
@@ -662,108 +681,6 @@ async function finishedFileOfSize(a: { user: { id: string; email: string } }, si
 const DAY = 86_400_000;
 
 // ---------------------------------------------------------------------------
-describe('invite-only sign-up', () => {
-	beforeAll(() => void (envMock.env.REGISTRATION_MODE = 'invite'));
-	afterAll(() => void (envMock.env.REGISTRATION_MODE = 'open'));
-
-	const newInvite = async (extra: Record<string, unknown> = {}) => {
-		const res = await call(createInvite as Handler, 'POST', '/api/admin/invites', { user: await adminUser(), body: extra });
-		expect(res.status).toBe(200);
-		return res.body as { id: string; code: string };
-	};
-
-	it('only admins can manage invites; the code is shown once and only its hash is stored', async () => {
-		const plain = await (async () => {
-			envMock.env.REGISTRATION_MODE = 'open';
-			try { return await signup('plain@example.com'); } finally { envMock.env.REGISTRATION_MODE = 'invite'; }
-		})();
-		expect((await call(createInvite as Handler, 'POST', '/api/admin/invites', { user: plain.user, body: {} })).status).toBe(403);
-		expect((await call(createInvite as Handler, 'POST', '/api/admin/invites', { body: {} })).status).toBe(401);
-		expect((await call(listInvitesH as Handler, 'GET', '/api/admin/invites', { user: plain.user })).status).toBe(403);
-
-		const { id, code } = await newInvite({ note: 'for mum' });
-		expect(code).toMatch(/^[A-Z2-7]{4}(-[A-Z2-7]{4}){3}$/);
-		const [row] = await db.select().from(invites).where(eq(invites.id, id));
-		expect(row.codeHash).toMatch(/^[0-9a-f]{64}$/);
-		expect(JSON.stringify(row)).not.toContain(code);
-
-		const list = await call(listInvitesH as Handler, 'GET', '/api/admin/invites', { user: await adminUser() });
-		expect(JSON.stringify(list.body)).not.toContain(code);
-		expect(list.body.invites.find((i: any) => i.id === id)).toMatchObject({ note: 'for mum', uses: 0, maxUses: 1, createdByEmail: 'admin@example.com' });
-
-		expect((await call(me as Handler, 'GET', '/api/auth/me', { user: await adminUser() })).body.isAdmin).toBe(true);
-		expect((await call(me as Handler, 'GET', '/api/auth/me', { user: plain.user })).body.isAdmin).toBe(false);
-	});
-
-	it('requires a valid code, and a code works exactly once', async () => {
-		const { code } = await newInvite();
-		expect((await registerRaw('inv1@example.com')).body.message).toMatch(/invite code is required/);
-		expect((await registerRaw('inv1@example.com', 'AAAA-AAAA-AAAA-AAAA')).status).toBe(403);
-		expect((await registerRaw('inv1@example.com', code)).status).toBe(200);
-		expect((await registerRaw('inv2@example.com', code)).status).toBe(403); // single use, already spent
-	});
-
-	it('accepts sloppy typing (lowercase, no dashes, spaces)', async () => {
-		const { code } = await newInvite();
-		expect((await registerRaw('sloppy@example.com', code.toLowerCase().replace(/-/g, ' '))).status).toBe(200);
-	});
-
-	it("a taken email doesn't burn the invite", async () => {
-		const first = await newInvite();
-		expect((await registerRaw('taken@example.com', first.code)).status).toBe(200);
-		const spare = await newInvite();
-		expect((await registerRaw('taken@example.com', spare.code)).status).toBe(409);
-		expect((await registerRaw('not-taken@example.com', spare.code)).status).toBe(200); // still valid
-	});
-
-	it('honours maxUses, expiry and revocation', async () => {
-		const multi = await newInvite({ maxUses: 2 });
-		expect((await registerRaw('m1@example.com', multi.code)).status).toBe(200);
-		expect((await registerRaw('m2@example.com', multi.code)).status).toBe(200);
-		expect((await registerRaw('m3@example.com', multi.code)).status).toBe(403);
-
-		const expiring = await newInvite({ expiresInDays: 7 });
-		await db.update(invites).set({ expiresAt: new Date(Date.now() - 1000) }).where(eq(invites.id, expiring.id));
-		expect((await registerRaw('late@example.com', expiring.code)).status).toBe(403);
-
-		const revoked = await newInvite();
-		const del = await call(revokeInvite as Handler, 'DELETE', `/api/admin/invites/${revoked.id}`, { user: await adminUser(), params: { id: revoked.id } });
-		expect(del.status).toBe(200);
-		expect((await registerRaw('revoked@example.com', revoked.code)).status).toBe(403);
-		expect((await call(revokeInvite as Handler, 'DELETE', `/api/admin/invites/${revoked.id}`, { user: await adminUser(), params: { id: revoked.id } })).status).toBe(404);
-	});
-
-	it('an invite can set the new account\'s storage quota', async () => {
-		const { id, code } = await newInvite({ quotaGb: 1 });
-		expect((await registerRaw('quota-inv@example.com', code)).status).toBe(200);
-		const [u] = await db.select().from(users).where(eq(users.email, 'quota-inv@example.com'));
-		expect(u.storageQuotaBytes).toBe(1024 ** 3);
-		expect(u.inviteId).toBe(id);
-	});
-
-	it('guessing codes locks the IP out; a closed server refuses everyone', async () => {
-		const ip = freshIp();
-		for (let i = 0; i < 8; i++) expect((await registerRaw(`g${i}@example.com`, 'BBBB-BBBB-BBBB-BBBB', ip)).status).toBe(403);
-		expect((await registerRaw('g9@example.com', 'BBBB-BBBB-BBBB-BBBB', ip)).status).toBe(429);
-
-		const { code } = await newInvite();
-		envMock.env.REGISTRATION_MODE = 'closed';
-		try {
-			expect((await registerRaw('closed@example.com', code)).body.message).toMatch(/closed/);
-		} finally {
-			envMock.env.REGISTRATION_MODE = 'invite';
-		}
-	});
-
-	it('releaseInvite gives a use back (used when a sign-up fails after redeeming)', async () => {
-		const { id, code } = await newInvite();
-		expect((await redeemInvite(code))?.uses).toBe(1);
-		expect(await redeemInvite(code)).toBeNull();
-		await releaseInvite(id);
-		expect((await redeemInvite(code))?.uses).toBe(1);
-	});
-});
-
 // ---------------------------------------------------------------------------
 describe('storage quota and usage', () => {
 	afterAll(() => void (envMock.env.DEFAULT_QUOTA_GB = undefined));

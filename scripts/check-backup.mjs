@@ -30,6 +30,8 @@ try {
 		await pg.transaction(async (tx) => { for (const statement of await vaultMigrations()) await tx.query(statement); });
 		await pg.query('SELECT version_number, thumbnail_iv FROM public.encrypted_files LIMIT 1');
 		await pg.query('SELECT device_id, token_version FROM public.sessions LIMIT 1');
+		const retiredData = await pg.query("SELECT to_regclass('public.invites') IS NULL AND NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'users' AND column_name = 'invite_id') AS removed");
+		if (!retiredData.rows[0].removed) throw new Error('Restored signup schema did not upgrade');
 	}
 	console.log(JSON.stringify({ verifiedRestore: true, createdAt: snapshot.createdAt, tables: snapshot.tables.length, rows, upgraded, database: 'temporary in-memory Postgres' }, null, 2));
 } catch (error) {

@@ -1,6 +1,6 @@
 import { fromBase64, toBase64 } from './encoding';
 import { unwrapRecordFileKey, type EncryptedFileRecord } from './download-pipeline';
-import { wrapKeyWithPassword, unwrapKeyWithPassword } from './password-wrap';
+import { wrapKeyWithPassword, unwrapKeyWithPassword, IncorrectPasswordError } from './password-wrap';
 import { DEFAULT_ARGON2ID_PARAMS } from './kdf';
 import type { KdfParams } from './types';
 
@@ -65,18 +65,32 @@ export interface ShareRecord {
 
 /** Re-derives the share password's key and unwraps the file key — entirely client-side. */
 export async function unwrapShareFileKey(record: ShareRecord, password: string): Promise<Uint8Array> {
+	let wrapped: Uint8Array;
+	let iv: Uint8Array;
+	let salt: Uint8Array;
+	try {
+		wrapped = fromBase64(record.wrappedFileKey);
+		iv = fromBase64(record.wrapIv);
+		salt = fromBase64(record.kdfSalt);
+		if (wrapped.length !== 48 || iv.length !== 12 || salt.length < 16) throw new Error('Invalid key descriptor');
+	} catch {
+		throw new Error('This share link has invalid encryption data. Ask the sender for a new link.');
+	}
 	try {
 		return await unwrapKeyWithPassword(
 			{
-				wrapped: fromBase64(record.wrappedFileKey),
-				iv: fromBase64(record.wrapIv),
-				salt: fromBase64(record.kdfSalt),
-				kdfParams: record.kdfParams as unknown as KdfParams
+				wrapped,
+				iv,
+				salt,
+				// The stored algorithm also supports older parameter objects
+				// that omitted their redundant KDF discriminator.
+				kdfParams: { ...record.kdfParams, kdf: record.kdf } as unknown as KdfParams
 			},
 			password
 		);
-	} catch {
-		throw new Error('Incorrect password');
+	} catch (error) {
+		if (error instanceof IncorrectPasswordError) throw error;
+		throw new Error('Your browser could not initialize file decryption. Reload this page and try again.', { cause: error });
 	}
 }
 

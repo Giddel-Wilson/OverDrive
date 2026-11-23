@@ -78,12 +78,8 @@ export const users = pgTable('users', {
 	totpLastStep: bigint('totp_last_step', { mode: 'number' }),
 
 	// Per-user storage limit in bytes. null = use the server default
-	// (DEFAULT_QUOTA_GB); 0 = unlimited. Set by an admin or by the invite
-	// the account was created with.
+	// (DEFAULT_QUOTA_GB); 0 = unlimited. Administrators can override it.
 	storageQuotaBytes: bigint('storage_quota_bytes', { mode: 'number' }),
-	// The invite this account was created with (informational, no FK: the
-	// invites table references users, and this keeps the two independent).
-	inviteId: uuid('invite_id'),
 
 	createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 	lastLoginAt: timestamp('last_login_at', { withTimezone: true })
@@ -349,26 +345,6 @@ export const sessions = pgTable(
 		deviceUnique: uniqueIndex('sessions_user_device_unique').on(t.userId, t.deviceId)
 	})
 );
-
-// ---------------------------------------------------------------------------
-// invites
-// Sign-up codes. Only a SHA-256 of the code is stored; the plaintext is
-// shown to the admin once, at creation.
-// ---------------------------------------------------------------------------
-
-export const invites = pgTable('invites', {
-	id: uuid('id').defaultRandom().primaryKey(),
-	codeHash: text('code_hash').notNull().unique(),
-	note: text('note'),
-	createdBy: uuid('created_by').references(() => users.id, { onDelete: 'set null' }),
-	maxUses: integer('max_uses').notNull().default(1),
-	uses: integer('uses').notNull().default(0),
-	expiresAt: timestamp('expires_at', { withTimezone: true }),
-	// Storage limit given to accounts created with this invite (null = default).
-	quotaBytes: bigint('quota_bytes', { mode: 'number' }),
-	revokedAt: timestamp('revoked_at', { withTimezone: true }),
-	createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow()
-});
 
 // ---------------------------------------------------------------------------
 // maintenance_state — tiny key/value store for the cleanup job (e.g. where

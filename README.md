@@ -97,7 +97,7 @@ src/lib/components/         EncryptUploader, StrengthIndicator, ConfirmModal, Sh
 ```bash
 npm install
 cp .env.example .env   # fill in DATABASE_URL, SESSION_SECRET, B2_*
-npm run db:push        # push schema to Neon (additive columns/tables; safe on existing data)
+npm run db:push        # create the schema in a new database
 npm run b2:cors -- https://your-app.vercel.app http://localhost:5173   # one-time, see "Direct uploads"
 npm run dev
 npm test               # crypto, upload/download pipelines, and every API route against in-memory Postgres
@@ -149,8 +149,8 @@ Backblaze B2 buckets are private by default, so ciphertext is only ever readable
 
 ## Running it for other people
 
-- **Sign-up is invite-only by default** (`REGISTRATION_MODE`). Open **Admin** (shown for emails in `ADMIN_EMAILS`) → create an invite → send the code or the `/register?invite=…` link. Only a SHA-256 of each code is stored, so it's shown once. Codes can be single- or multi-use, expire, carry their own storage limit, and be revoked. Wrong codes count toward the same per-IP lockout as wrong passwords. On an empty database the first sign-up is always allowed so you can create the admin account.
-- **Storage limits.** `DEFAULT_QUOTA_GB` per account (admin and per-invite overrides; 0 = unlimited). Everything stored counts: finished files, the trash (until purged) and unfinished uploads. Uploads over the limit are refused at `init`, before any encryption work. It's a soft limit — two uploads started in the same instant can both pass. The Vault and Account pages show the meter.
+- **Open sign-up.** Anyone can create an OverDrive account with a separate private, encrypted vault. `ADMIN_EMAILS` identifies accounts allowed to manage storage limits and database backups. Each account owns its files and encryption keys.
+- **Storage limits.** `DEFAULT_QUOTA_GB` per account (administrator overrides; 0 = unlimited). Everything stored counts: finished files, the trash (until purged) and unfinished uploads. Uploads over the limit are refused at `init`, before any encryption work. It's a soft limit — two uploads started in the same instant can both pass. The Vault and Account pages show the meter.
 - **Sessions.** Each sign-in is a row in `sessions`; the cookie's JWT carries its id and every request checks the row, so a device can be signed out immediately (Account → *Devices & sessions*), signing out revokes server-side, changing the password signs out every other device, and account recovery signs out all of them. Cookies issued before this feature carry no session id, so everyone signs in once after upgrading.
 - **Daily cleanup** (`/api/cron/cleanup`, scheduled in `vercel.json`, protected by `CRON_SECRET`): purges trash older than 30 days, discards uploads abandoned for 48 h, deletes expired sessions, and sweeps orphaned chunks (stored objects no database row refers to, older than 24 h) — resuming from a saved cursor so a large bucket is covered over several runs. Vercel Hobby allows daily cron jobs, which is exactly this schedule.
 - **Admin sees** emails, sizes and sign-in times — never file names, keys or content.
@@ -207,7 +207,7 @@ npm run db:restore -- --file .backups/<timestamp>.json.gz.enc
 # Or: npm run db:restore -- --from _database-backups/v1/<timestamp>.json.gz.enc
 ```
 
-The restore command refuses the current `DATABASE_URL` and any non-empty target. It recreates schema and rows, applies the current additive migrations and revokes restored sessions in one transaction. Verify the recovered vault before switching the app's `DATABASE_URL`. `--sql-out <path>` exports the snapshot's decrypted SQL for a manual recovery. Database snapshots contain metadata and wrapped keys; they do not copy B2 file chunks, so permanently purged ciphertext stays gone. The exporter supports this vault's schema up to 64 MiB of uncompressed data; use `pg_dump` for a larger database or one with custom views, partitions or row policies.
+The restore command refuses the current `DATABASE_URL` and any non-empty target. It recreates schema and rows, applies the current schema migrations and revokes restored sessions in one transaction. Verify the recovered vault before switching the app's `DATABASE_URL`. `--sql-out <path>` exports the snapshot's decrypted SQL for a manual recovery. Database snapshots contain metadata and wrapped keys; they do not copy B2 file chunks, so permanently purged ciphertext stays gone. The exporter supports this vault's schema up to 64 MiB of uncompressed data; use `pg_dump` for a larger database or one with custom views, partitions or row policies.
 
 ## Photos and file versions
 
@@ -223,7 +223,7 @@ Both encryption options start unselected. Click a selected method again to clear
 
 The last five revisions (current plus four previous) are kept. Active share links pin older versions until the links end, including an in-flight download's grant. Versions and thumbnails count toward quota; reusing a stored revision on restore counts its objects once. Restore keeps the current name/folder and archives the content it replaces. Cleanup retries failed version purges, protects retained storage during orphan sweeps, and permanent file deletion removes all of the file's revisions and pending replacements.
 
-Apply the additive migration before serving the updated code on an existing deployment:
+Deploy the updated application before retiring signup data on an existing deployment. Then create a verified backup and apply the schema migrations:
 
 ```powershell
 npm run db:backup

@@ -26,9 +26,7 @@ export const registerSchema = z.object({
 	privateKeyKdfParams: z.record(z.unknown()),
 	recoveryWrappedPrivateKey: recoveryFields.recoveryWrappedPrivateKey.optional(),
 	recoveryIv: recoveryFields.recoveryIv.optional(),
-	recoveryAuthToken: recoveryFields.recoveryAuthToken.optional(),
-	/** Required when the server is invite-only (the default). */
-	inviteCode: z.string().trim().max(64).optional()
+	recoveryAuthToken: recoveryFields.recoveryAuthToken.optional()
 });
 
 export const loginSchema = z.object({

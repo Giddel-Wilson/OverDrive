@@ -40,7 +40,9 @@ const config = {
 					mode: 'auto',
 					directives: {
 						'default-src': ['self'],
-						'script-src': ['self'],
+						// Argon2id and ChaCha20 use libsodium's WebAssembly runtime.
+						// Allow WASM compilation while keeping JavaScript eval disabled.
+						'script-src': ['self', 'wasm-unsafe-eval'],
 						// 'unsafe-inline' kept for style-src: components use
 						// inline style="" attributes for CSS-variable-driven
 						// theming (e.g. dynamic strength-indicator colors)
