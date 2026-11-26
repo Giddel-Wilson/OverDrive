@@ -5,11 +5,10 @@ const keyAlgoSchema = z.enum(['RSA-OAEP', 'ECDH-P256']);
 const fileAlgoSchema = z.enum(['AES-GCM', 'ChaCha20-Poly1305']);
 const kdfAlgoSchema = z.enum(['PBKDF2', 'Argon2id']);
 const base64Schema = z.string().min(1).max(50_000);
-// Authenticator apps and clipboard managers sometimes group TOTP digits
-// (for example, "123 456" or "123-456"). Canonicalize those before the
-// existing six-digit validation runs.
+// Authenticator apps and clipboard managers can insert spaces, dashes, or
+// other formatting characters between TOTP digits. Canonicalize those first.
 const totpCodeSchema = z.preprocess(
-	(value) => (typeof value === 'string' ? value.replace(/[ -]/g, '') : value),
+	(value) => (typeof value === 'string' ? value.replace(/\D/g, '') : value),
 	z.string().regex(/^\d{6}$/)
 );
 

@@ -85,8 +85,10 @@
 
 	function onCodeInput(event: Event) {
 		const input = event.currentTarget as HTMLInputElement;
-		// Keep the field canonical when a grouped code is typed or pasted.
+		// Canonicalize the actual field value as well as Svelte state. This lets
+		// native pattern validation accept codes pasted with separators or spaces.
 		code = input.value.replace(/\D/g, '').slice(0, 6);
+		input.value = code;
 	}
 </script>
 
@@ -130,7 +132,6 @@
 					inputmode="numeric"
 					autocomplete="one-time-code"
 					pattern="[0-9]{6}"
-					maxlength="6"
 					required
 					bind:value={code}
 					oninput={onCodeInput}
@@ -160,7 +161,6 @@
 					inputmode="numeric"
 					autocomplete="one-time-code"
 					pattern="[0-9]{6}"
-					maxlength="6"
 					required
 					bind:value={code}
 					oninput={onCodeInput}
