@@ -3,11 +3,59 @@ import { fromBase64, toBase64 } from './encoding';
 import { createBlobSink, decryptFileToSink, decryptRecordMetadata, unwrapRecordFileKey, type EncryptedFileRecord } from './download-pipeline';
 import { MAX_THUMBNAIL_BYTES, MAX_THUMBNAIL_SOURCE_BYTES, THUMBNAIL_EDGE } from '../shared/limits';
 import { THUMBNAIL_INFO_V1 } from '../shared/legacy-protocol.js';
+import heicWasmUrl from '@discourse/heic/codec/dec/heic_dec.wasm?url';
+import jxlWasmUrl from '@jsquash/jxl/codec/dec/jxl_dec.wasm?url';
+import avifWasmUrl from '@jsquash/avif/codec/dec/avif_dec.wasm?url';
 
 export interface EncryptedThumbnail { encryptedBlob: string; iv: string; ciphertextSha256: string }
 
-const safeImage = /^image\/(jpeg|png|webp|avif|gif|bmp|heic|heif)$/i;
+// Let the browser's image decoder decide which image subtypes it can rasterize.
+// A fixed list silently excluded valid types such as SVG, TIFF, and newer formats.
+const safeImage = /^image\/[a-z0-9.+-]+$/i;
 const thumbnailMime = new Set(['image/webp', 'image/jpeg', 'image/png']);
+const heicMimes = new Set(['image/heic', 'image/heif', 'image/heic-sequence', 'image/heif-sequence']);
+type ImageDataDecoder = (data: ArrayBuffer) => Promise<ImageData | null>;
+let heicDecoder: Promise<ImageDataDecoder> | undefined;
+let jxlDecoder: Promise<ImageDataDecoder> | undefined;
+let avifDecoder: Promise<ImageDataDecoder> | undefined;
+
+async function decodeWithCodec(source: Blob, mime: string): Promise<ImageData | null> {
+	const data = await source.arrayBuffer();
+	if (heicMimes.has(mime)) {
+		heicDecoder ??= (async () => {
+			const codec = await import('@discourse/heic/decode');
+			await codec.init({ locateFile: () => heicWasmUrl });
+			return codec.default;
+		})();
+		return (await heicDecoder)(data);
+	}
+	if (mime === 'image/jxl') {
+		jxlDecoder ??= (async () => {
+			const codec = await import('@jsquash/jxl/decode');
+			await codec.init({ locateFile: () => jxlWasmUrl });
+			return codec.default;
+		})();
+		return (await jxlDecoder)(data);
+	}
+	if (mime === 'image/avif') {
+		avifDecoder ??= (async () => {
+			const codec = await import('@jsquash/avif/decode');
+			await codec.init({ locateFile: () => avifWasmUrl });
+			return codec.default;
+		})();
+		return (await avifDecoder)(data);
+	}
+	if (mime === 'image/tiff' || mime === 'image/tif') {
+		const UTIF = await import('utif');
+		const ifds = UTIF.decode(data);
+		const first = ifds[0];
+		if (!first) return null;
+		UTIF.decodeImage(data, first);
+		const rgba = UTIF.toRGBA8(first);
+		return new ImageData(new Uint8ClampedArray(rgba), first.width, first.height);
+	}
+	return null;
+}
 
 async function thumbnailKey(fileKey: Uint8Array): Promise<Uint8Array> {
 	const key = await crypto.subtle.importKey('raw', Uint8Array.from(fileKey).buffer, 'HKDF', false, ['deriveBits']);
@@ -16,12 +64,37 @@ async function thumbnailKey(fileKey: Uint8Array): Promise<Uint8Array> {
 
 /** Rasterize locally. Unsupported formats and oversized sources keep a placeholder. */
 export async function createPhotoThumbnail(source: Blob): Promise<Blob | null> {
-	if (!safeImage.test(source.type) || source.size > MAX_THUMBNAIL_SOURCE_BYTES || typeof document === 'undefined') return null;
-	let image: ImageBitmap | HTMLImageElement | null = null;
+	const mime = source.type.split(';', 1)[0].trim().toLowerCase();
+	if (!safeImage.test(mime) || source.size > MAX_THUMBNAIL_SOURCE_BYTES || typeof document === 'undefined') return null;
+	let image: ImageBitmap | HTMLImageElement | HTMLCanvasElement | null = null;
 	let sourceUrl: string | null = null;
 	try {
-		if (typeof createImageBitmap === 'function') image = await createImageBitmap(source, { imageOrientation: 'from-image' });
-		else {
+		if (typeof createImageBitmap === 'function') {
+			try {
+				image = await createImageBitmap(source, { imageOrientation: 'from-image' });
+			} catch {
+				// Some browsers expose createImageBitmap but lack a decoder for a
+				// particular image subtype. Continue through the format fallbacks.
+			}
+		}
+		if (!image) {
+			try {
+				const decoded = await decodeWithCodec(source, mime);
+				if (decoded) {
+					const decodedCanvas = document.createElement('canvas');
+					decodedCanvas.width = decoded.width;
+					decodedCanvas.height = decoded.height;
+					const decodedContext = decodedCanvas.getContext('2d');
+					if (!decodedContext) return null;
+					decodedContext.putImageData(decoded, 0, 0);
+					image = typeof createImageBitmap === 'function' ? await createImageBitmap(decodedCanvas) : decodedCanvas;
+				}
+			} catch {
+				// If a codec cannot parse this particular file, try the browser's
+				// regular image element below before giving up.
+			}
+		}
+		if (!image) {
 			sourceUrl = URL.createObjectURL(source);
 			const element = new Image();
 			await new Promise<void>((resolve, reject) => {
