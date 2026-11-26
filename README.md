@@ -4,6 +4,8 @@ Secure file storage and sharing with client-side encryption. Files are
 encrypted **in the browser** before a single byte leaves the device — the
 server, the database, and blob storage only ever hold ciphertext.
 
+[Open OverDrive](https://w-overdrive.vercel.app/)
+
 ## Stack
 
 - SvelteKit 2 with Svelte 5 (runes) + TypeScript
@@ -113,6 +115,17 @@ npm run check          # svelte-check — type errors across the whole app
 5. Run `npm run b2:cors -- <your origins>` once (see **Direct uploads** below), then push to `main` (or run `vercel --prod`) to deploy.
 
 **Why chunks are 2 MiB, not 4 MiB** (`crypto/types.ts`): Vercel Functions have a hard, non-configurable 4.5MB limit on request and response bodies. Chunk *downloads* (and the upload fallback relay) still pass through a function as base64-in-JSON, which adds ~33% overhead — 4 MiB chunks would encode to ~5.3MB and be rejected with `413: FUNCTION_PAYLOAD_TOO_LARGE`. 2 MiB chunks encode to ~2.7MB, comfortably under the limit. Normal uploads no longer go through a function at all (below).
+
+## Google Search
+
+The public homepage and two guides render as HTML. Their canonical URLs and the sitemap use the production
+origin in `src/lib/server/seo.ts`. Update that origin if the public domain moves.
+
+In Google Search Console, add the URL-prefix property `https://w-overdrive.vercel.app/`.
+Select **Verify** with the HTML file method. Keep the Google verification file in
+`static/` so Google can recheck ownership. Submit `sitemap.xml` under **Sitemaps** and use
+**URL inspection** on the homepage to request indexing. **Performance → Search results**
+shows the queries, impressions, clicks and average positions Google records for this site.
 
 ## Direct uploads (no size cap from Vercel)
 

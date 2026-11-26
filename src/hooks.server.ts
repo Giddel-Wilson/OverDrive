@@ -1,6 +1,7 @@
 import type { Handle } from '@sveltejs/kit';
 import { dev } from '$app/environment';
 import { readSessionCookie } from '$server/auth-server';
+import { siteOrigin } from '$server/seo';
 
 // Applied in production only — dev builds aren't what's exposed to the
 // internet, and some of these (HSTS especially) make no sense over the
@@ -19,8 +20,15 @@ const SECURITY_HEADERS: Record<string, string> = {
 };
 
 export const handle: Handle = async ({ event, resolve }) => {
-	event.locals.user = await readSessionCookie(event.cookies);
+	const routeId = event.route?.id;
+	const publicPage = routeId === '/(public)' || routeId?.startsWith('/(public)/');
+	const discoveryFile = routeId === '/robots.txt' || routeId === '/sitemap.xml';
+	event.locals.user = publicPage || discoveryFile ? null : await readSessionCookie(event.cookies);
 	const response = await resolve(event);
+
+	if ((!publicPage && !discoveryFile) || event.isDataRequest || response.status >= 400 || event.url.origin !== siteOrigin) {
+		response.headers.set('X-Robots-Tag', 'noindex');
+	}
 
 	if (!dev) {
 		for (const [key, value] of Object.entries(SECURITY_HEADERS)) {
