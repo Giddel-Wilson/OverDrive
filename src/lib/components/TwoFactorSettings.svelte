@@ -45,6 +45,10 @@
 	async function confirmEnable(e: Event) {
 		e.preventDefault();
 		errorMsg = null;
+		if (!/^\d{6}$/.test(code)) {
+			errorMsg = 'Enter the 6-digit code from your authenticator app.';
+			return;
+		}
 		busy = true;
 		try {
 			await post({ action: 'enable', code: code.trim() });
@@ -62,6 +66,10 @@
 	async function confirmDisable(e: Event) {
 		e.preventDefault();
 		errorMsg = null;
+		if (!/^\d{6}$/.test(code)) {
+			errorMsg = 'Enter the 6-digit code from your authenticator app.';
+			return;
+		}
 		busy = true;
 		try {
 			await post({ action: 'disable', password, code: code.trim() });
@@ -112,7 +120,7 @@
 			</button>
 		{/if}
 	{:else if stage === 'setup'}
-		<form class="space-y-4" onsubmit={confirmEnable}>
+		<form class="space-y-4" novalidate onsubmit={confirmEnable}>
 			<ol class="list-decimal space-y-1 pl-5 text-sm text-[var(--color-text-secondary)]">
 				<li>Scan this QR code with your authenticator app.</li>
 				<li>Enter the 6-digit code it shows to finish.</li>
@@ -131,7 +139,6 @@
 					id="tf-code"
 					inputmode="numeric"
 					autocomplete="one-time-code"
-					pattern="[0-9]{6}"
 					required
 					bind:value={code}
 					oninput={onCodeInput}
@@ -148,7 +155,7 @@
 			</div>
 		</form>
 	{:else}
-		<form class="space-y-4" onsubmit={confirmDisable}>
+		<form class="space-y-4" novalidate onsubmit={confirmDisable}>
 			<p class="text-sm text-[var(--color-text-secondary)]">Confirm with both factors to turn two-factor off.</p>
 			<div class="space-y-1.5">
 				<label for="tf-pw" class={ui.label}>Password</label>
@@ -160,7 +167,6 @@
 					id="tf-code2"
 					inputmode="numeric"
 					autocomplete="one-time-code"
-					pattern="[0-9]{6}"
 					required
 					bind:value={code}
 					oninput={onCodeInput}
