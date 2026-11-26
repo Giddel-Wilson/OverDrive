@@ -5,6 +5,13 @@ const keyAlgoSchema = z.enum(['RSA-OAEP', 'ECDH-P256']);
 const fileAlgoSchema = z.enum(['AES-GCM', 'ChaCha20-Poly1305']);
 const kdfAlgoSchema = z.enum(['PBKDF2', 'Argon2id']);
 const base64Schema = z.string().min(1).max(50_000);
+// Authenticator apps and clipboard managers sometimes group TOTP digits
+// (for example, "123 456" or "123-456"). Canonicalize those before the
+// existing six-digit validation runs.
+const totpCodeSchema = z.preprocess(
+	(value) => (typeof value === 'string' ? value.replace(/[ -]/g, '') : value),
+	z.string().regex(/^\d{6}$/)
+);
 
 const recoveryFields = {
 	// Second copy of the private key, encrypted under the recovery key, plus
@@ -32,7 +39,7 @@ export const registerSchema = z.object({
 export const loginSchema = z.object({
 	email: z.string().trim().toLowerCase().email().max(320),
 	password: z.string().min(1).max(256),
-	totp: z.string().regex(/^\d{6}$/).optional()
+	totp: totpCodeSchema.optional()
 });
 
 /** Set or replace the recovery key for the signed-in account. */
@@ -54,8 +61,8 @@ export const recoverSchema = z.object({
 
 export const twoFactorSchema = z.discriminatedUnion('action', [
 	z.object({ action: z.literal('setup') }),
-	z.object({ action: z.literal('enable'), code: z.string().regex(/^\d{6}$/) }),
-	z.object({ action: z.literal('disable'), password: z.string().min(1).max(256), code: z.string().regex(/^\d{6}$/) })
+	z.object({ action: z.literal('enable'), code: totpCodeSchema }),
+	z.object({ action: z.literal('disable'), password: z.string().min(1).max(256), code: totpCodeSchema })
 ]);
 
 export const changePasswordSchema = z.object({

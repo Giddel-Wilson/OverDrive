@@ -82,6 +82,12 @@
 		code = '';
 		password = '';
 	}
+
+	function onCodeInput(event: Event) {
+		const input = event.currentTarget as HTMLInputElement;
+		// Keep the field canonical when a grouped code is typed or pasted.
+		code = input.value.replace(/\D/g, '').slice(0, 6);
+	}
 </script>
 
 <div class="space-y-4">
@@ -127,6 +133,7 @@
 					maxlength="6"
 					required
 					bind:value={code}
+					oninput={onCodeInput}
 					class="{ui.input} {ui.mono} max-w-48 tracking-[0.3em]"
 				/>
 			</div>
@@ -156,6 +163,7 @@
 					maxlength="6"
 					required
 					bind:value={code}
+					oninput={onCodeInput}
 					class="{ui.input} {ui.mono} max-w-48 tracking-[0.3em]"
 				/>
 			</div>
